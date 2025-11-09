@@ -81,7 +81,7 @@ grace_sec: 300
 ping_every_sec: 30
 
 # Fallback policy when primary server is unavailable: LOBBY or WAIT
-fallback_policy: "LOBBY"
+fallback_policy: offer   # strict | offer | auto
 
 # Map server names to MAC addresses for wake-on-LAN
 server_to_mac:
