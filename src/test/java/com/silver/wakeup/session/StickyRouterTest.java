@@ -58,24 +58,16 @@ class StickyRouterTest {
     void constructorRequiresNonNull() {
         assertThrows(NullPointerException.class, () ->
                 new StickyRouter(
-                        null, plugin, "lobby", 300, 30,
-                        StickyRouter.FallbackPolicy.AUTO, groups, serverToMac,
+                null, plugin, "lobby", 300, 30,
+                groups, serverToMac,
                         wakeService, logger, allowedListFn, Set.of(), portalHandoffService
                 )
         );
 
         assertThrows(NullPointerException.class, () ->
                 new StickyRouter(
-                        proxyServer, plugin, null, 300, 30,
-                        StickyRouter.FallbackPolicy.AUTO, groups, serverToMac,
-                        wakeService, logger, allowedListFn, Set.of(), portalHandoffService
-                )
-        );
-
-        assertThrows(NullPointerException.class, () ->
-                new StickyRouter(
-                        proxyServer, plugin, "lobby", 300, 30,
-                        null, groups, serverToMac,
+            proxyServer, null, "lobby", 300, 30,
+                groups, serverToMac,
                         wakeService, logger, allowedListFn, Set.of(), portalHandoffService
                 )
         );
@@ -84,29 +76,7 @@ class StickyRouterTest {
     @Test
     @DisplayName("router can be created with valid parameters")
     void constructorValid() {
-        assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO));
-        assertNotNull(createRouter(StickyRouter.FallbackPolicy.OFFER));
-        assertNotNull(createRouter(StickyRouter.FallbackPolicy.STRICT));
-    }
-
-    @Nested
-    @DisplayName("FallbackPolicy enum")
-    class FallbackPolicyTests {
-
-        @Test
-        @DisplayName("all policies have expected values")
-        void policiesExist() {
-            assertTrue(StickyRouter.FallbackPolicy.STRICT.name().equals("STRICT"));
-            assertTrue(StickyRouter.FallbackPolicy.OFFER.name().equals("OFFER"));
-            assertTrue(StickyRouter.FallbackPolicy.AUTO.name().equals("AUTO"));
-        }
-
-        @Test
-        @DisplayName("policies can be compared")
-        void policiesComparable() {
-            assertEquals(StickyRouter.FallbackPolicy.STRICT, StickyRouter.FallbackPolicy.STRICT);
-            assertNotEquals(StickyRouter.FallbackPolicy.STRICT, StickyRouter.FallbackPolicy.OFFER);
-        }
+        assertNotNull(createRouter());
     }
 
     @Nested
@@ -116,17 +86,17 @@ class StickyRouterTest {
         @Test
         @DisplayName("router accepts various grace period values")
         void gracePeriodValues() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 0, 30));
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 60, 30));
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 3600, 30));
+            assertNotNull(createRouter(0, 30));
+            assertNotNull(createRouter(60, 30));
+            assertNotNull(createRouter(3600, 30));
         }
 
         @Test
         @DisplayName("router accepts various ping interval values")
         void pingIntervalValues() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 300, 0));
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 300, 15));
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO, 300, 120));
+            assertNotNull(createRouter(300, 0));
+            assertNotNull(createRouter(300, 15));
+            assertNotNull(createRouter(300, 120));
         }
     }
 
@@ -139,7 +109,7 @@ class StickyRouterTest {
         void emptyGroups() {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
-                    StickyRouter.FallbackPolicy.AUTO, Map.of(), serverToMac,
+                    Map.of(), serverToMac,
                     wakeService, logger, allowedListFn, Set.of(), portalHandoffService
             ));
         }
@@ -149,7 +119,7 @@ class StickyRouterTest {
         void emptyServerToMac() {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
-                    StickyRouter.FallbackPolicy.AUTO, groups, Map.of(),
+                    groups, Map.of(),
                     wakeService, logger, allowedListFn, Set.of(), portalHandoffService
             ));
         }
@@ -157,7 +127,7 @@ class StickyRouterTest {
         @Test
         @DisplayName("router with empty admin names")
         void emptyAdminNames() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO));
+            assertNotNull(createRouter());
         }
 
         @Test
@@ -165,7 +135,7 @@ class StickyRouterTest {
         void withAdminNames() {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
-                    StickyRouter.FallbackPolicy.AUTO, groups, serverToMac,
+                    groups, serverToMac,
                     wakeService, logger, allowedListFn, Set.of("Admin1", "Admin2"), portalHandoffService
             ));
         }
@@ -180,7 +150,6 @@ class StickyRouterTest {
         void groupsStored() {
             StickyRouter router = new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
-                    StickyRouter.FallbackPolicy.AUTO,
                     Map.of("group1", List.of("server1", "server2")),
                     Map.of(),
                     wakeService, logger, allowedListFn, Set.of(), portalHandoffService
@@ -191,7 +160,7 @@ class StickyRouterTest {
         @Test
         @DisplayName("router handles server-to-mac mapping")
         void serverToMacMapped() {
-            StickyRouter router = createRouter(StickyRouter.FallbackPolicy.AUTO);
+            StickyRouter router = createRouter();
             assertNotNull(router);
         }
 
@@ -205,48 +174,24 @@ class StickyRouterTest {
 
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
-                    StickyRouter.FallbackPolicy.AUTO, manyGroups, Map.of(),
+                    manyGroups, Map.of(),
                     wakeService, logger, allowedListFn, Set.of(), portalHandoffService
             ));
         }
     }
 
-    @Nested
-    @DisplayName("fallback policy behavior")
-    class FallbackPolicyBehaviorTests {
-
-        @Test
-        @DisplayName("STRICT policy created successfully")
-        void strictPolicy() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.STRICT));
-        }
-
-        @Test
-        @DisplayName("OFFER policy created successfully")
-        void offerPolicy() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.OFFER));
-        }
-
-        @Test
-        @DisplayName("AUTO policy created successfully")
-        void autoPolicy() {
-            assertNotNull(createRouter(StickyRouter.FallbackPolicy.AUTO));
-        }
-    }
-
     // Helper method to create a StickyRouter with default parameters
-    private StickyRouter createRouter(StickyRouter.FallbackPolicy policy) {
-        return createRouter(policy, 300, 30);
+    private StickyRouter createRouter() {
+        return createRouter(300, 30);
     }
 
-    private StickyRouter createRouter(StickyRouter.FallbackPolicy policy, long graceSec, long pingEvery) {
+    private StickyRouter createRouter(long graceSec, long pingEvery) {
         return new StickyRouter(
                 proxyServer,
                 plugin,
                 "lobby",
                 graceSec,
                 pingEvery,
-                policy,
                 groups,
                 serverToMac,
                 wakeService,

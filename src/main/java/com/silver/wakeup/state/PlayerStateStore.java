@@ -21,11 +21,13 @@ import java.util.UUID;
 public class PlayerStateStore {
     private final Path lastServerPath;
     private final Path visitedPath;
+    private final Path lastListedPath;
     private final Logger logger;
 
     public PlayerStateStore(Path dataDir, Logger logger) {
         this.lastServerPath = dataDir.resolve("last-server.properties");
         this.visitedPath = dataDir.resolve("visited.properties");
+        this.lastListedPath = dataDir.resolve("last-listed.properties");
         this.logger = logger;
     }
 
@@ -59,10 +61,33 @@ public class PlayerStateStore {
         return result;
     }
 
+    /**
+     * Loads the last known visited server within the configured return-servers list.
+     */
+    public Map<UUID, String> loadLastListedServers() {
+        Properties props = loadProperties(lastListedPath);
+        Map<UUID, String> result = new HashMap<>();
+        for (String key : props.stringPropertyNames()) {
+            try {
+                UUID id = UUID.fromString(key);
+                result.put(id, props.getProperty(key));
+            } catch (IllegalArgumentException ignored) {
+                // skip malformed entries
+            }
+        }
+        return result;
+    }
+
     public void saveLastServers(Map<UUID, String> lastServer) {
         Properties props = new Properties();
         lastServer.forEach((id, name) -> props.setProperty(id.toString(), name));
         storeProperties(lastServerPath, props, "WakeUpLobby last-server map");
+    }
+
+    public void saveLastListedServers(Map<UUID, String> lastListedServer) {
+        Properties props = new Properties();
+        lastListedServer.forEach((id, name) -> props.setProperty(id.toString(), name));
+        storeProperties(lastListedPath, props, "WakeUpLobby last-listed map");
     }
 
     public void saveVisitedServers(Map<UUID, Set<String>> visited) {

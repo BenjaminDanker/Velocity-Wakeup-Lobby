@@ -44,6 +44,15 @@ class PlayerStateStoreTest {
     }
 
     @Test
+    @DisplayName("loadLastListedServers returns empty map when file does not exist")
+    void loadLastListedServersEmptyWhenMissing() {
+        PlayerStateStore store = new PlayerStateStore(tempDir, logger);
+        Map<UUID, String> lastListed = store.loadLastListedServers();
+
+        assertTrue(lastListed.isEmpty());
+    }
+
+    @Test
     @DisplayName("saveLastServers persists data")
     void saveLastServersPersists() {
         PlayerStateStore store1 = new PlayerStateStore(tempDir, logger);
@@ -76,6 +85,22 @@ class PlayerStateStoreTest {
         assertEquals(1, loaded.size());
         assertTrue(loaded.get(playerId).contains("server1"));
         assertTrue(loaded.get(playerId).contains("server2"));
+    }
+
+    @Test
+    @DisplayName("saveLastListedServers persists data")
+    void saveLastListedServersPersists() {
+        PlayerStateStore store1 = new PlayerStateStore(tempDir, logger);
+        UUID playerId = UUID.randomUUID();
+        Map<UUID, String> data = Map.of(playerId, "magic");
+
+        store1.saveLastListedServers(data);
+
+        PlayerStateStore store2 = new PlayerStateStore(tempDir, logger);
+        Map<UUID, String> loaded = store2.loadLastListedServers();
+
+        assertEquals(1, loaded.size());
+        assertEquals("magic", loaded.get(playerId));
     }
 
     @Test

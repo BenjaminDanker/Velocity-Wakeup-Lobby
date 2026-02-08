@@ -3,13 +3,10 @@ package com.silver.wakeup.session;
 import com.silver.wakeup.plugin.VelocityPlugin;
 import com.silver.wakeup.portal.PortalHandoffService;
 import com.silver.wakeup.wake.WakeService;
-import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
-import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -22,25 +19,17 @@ import java.util.function.Function;
  * 
  * <p>Maintains player session state to keep players on their last-known server
  * when possible. Handles fallback routing when servers are unavailable.
- * 
- * <p>Fallback policies:
- * <ul>
- *   <li>STRICT: Only route to explicitly configured servers; fail if unavailable</li>
- *   <li>OFFER: Offer alternative servers from the group if primary is unavailable</li>
- *   <li>AUTO: Automatically route to available servers or lobby on failure</li>
- * </ul>
  */
 public class StickyRouter {
-    public enum FallbackPolicy { STRICT, OFFER, AUTO }
-
     private final String holdingServer;
     private final Map<String, String> serverToMac;    // server -> mac
     private final Logger log;
-    private final FallbackPolicy policy;
 
     private final Set<UUID> internalOnce = ConcurrentHashMap.newKeySet();
     private final StickySessionManager sessionManager;
-    private final FallbackPlanner fallbackPlanner;
+
+    private record ReturnEligibility(String originServer, String targetServer, long eligibleSinceMs) {}
+    private final ConcurrentHashMap<UUID, ReturnEligibility> returnEligible = new ConcurrentHashMap<>();
 
     public StickyRouter(
             ProxyServer proxy,
@@ -48,7 +37,6 @@ public class StickyRouter {
             String holdingServer,
             long graceSeconds,
             long pingEverySeconds,
-            FallbackPolicy policy,
             Map<String, List<String>> groups,
             Map<String, String> serverToMac,
             WakeService wakeService,
@@ -61,7 +49,6 @@ public class StickyRouter {
         this.holdingServer = Objects.requireNonNull(holdingServer, "holdingServer");
         this.serverToMac = Objects.requireNonNull(serverToMac, "serverToMac");
         this.log = Objects.requireNonNull(log, "log");
-        this.policy = Objects.requireNonNull(policy, "policy");
 
         // Validate dependencies passed to child objects
         Objects.requireNonNull(proxy, "proxy");
@@ -78,19 +65,10 @@ public class StickyRouter {
                 wakeService,
                 portalHandoffService,
                 log,
+                holdingServer,
                 graceSeconds,
                 pingEverySeconds,
                 this
-        );
-
-        this.fallbackPlanner = new FallbackPlanner(
-                proxy,
-                log,
-                allowedListFn,
-                uuid -> proxy.getPlayer(uuid)
-                        .map(p -> adminNames.contains(p.getUsername().toLowerCase(Locale.ROOT)))
-                        .orElse(false),
-                group -> groups.getOrDefault(group, List.of())
         );
     }
 
@@ -103,19 +81,9 @@ public class StickyRouter {
         log.info("[StickyRouter] beginStickyWait: player={} target={} origin={}",
                 playerId, target, originServer);
 
+        clearReturnEligibility(playerId);
         String mac = serverToMac.get(target);
         sessionManager.beginStickyWait(playerId, target, originServer, mac);
-    }
-
-    /** Player-invoked immediate fallback (OFFER mode, or manual escape during HOLD). */
-    public void fallbackNow(Player p) {
-        if (policy == FallbackPolicy.STRICT) {
-            p.sendMessage(Component.text("⚠ Fallback is disabled by policy."));
-            return;
-        }
-
-        sessionManager.cleanupStickyState(p.getUniqueId());
-        fallbackPlanner.handleManualFallback(p, this);
     }
 
     /** Mark next PreConnect for this player as plugin-internal (skip manual checks). */
@@ -138,11 +106,34 @@ public class StickyRouter {
         return hasState;
     }
 
-    void handleStickyTimeout(Player player, String originServer) {
-        fallbackPlanner.handleTimeoutFallback(player, player.getUniqueId(), originServer, holdingServer, this);
+    /** Cancel any active sticky-wait sequence for this player. */
+    public void cancelStickyWait(UUID who) {
+        log.info("[StickyRouter] cancelStickyWait: player={}", who);
+        sessionManager.cleanupStickyState(who);
+        clearReturnEligibility(who);
     }
 
-    FallbackPolicy policy() {
-        return policy;
+    /** Mark a player as eligible to use /return (grace expired while waiting). */
+    void markReturnEligible(UUID playerId, String originServer, String targetServer) {
+        returnEligible.put(playerId, new ReturnEligibility(originServer, targetServer, System.currentTimeMillis()));
+        log.info("[StickyRouter] markReturnEligible: player={} origin={} target={}", playerId, originServer, targetServer);
+    }
+
+    public boolean isReturnEligible(UUID playerId) {
+        return returnEligible.containsKey(playerId);
+    }
+
+    public String returnOriginServer(UUID playerId) {
+        ReturnEligibility e = returnEligible.get(playerId);
+        return e == null ? null : e.originServer();
+    }
+
+    public String returnTargetServer(UUID playerId) {
+        ReturnEligibility e = returnEligible.get(playerId);
+        return e == null ? null : e.targetServer();
+    }
+
+    public void clearReturnEligibility(UUID playerId) {
+        returnEligible.remove(playerId);
     }
 }

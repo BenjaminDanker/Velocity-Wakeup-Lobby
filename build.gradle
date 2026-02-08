@@ -10,7 +10,8 @@ java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
 
 repositories {
   mavenCentral()
-  maven { url = 'https://repo.velocitypowered.com/snapshots/' }
+  // Velocity artifacts are hosted via PaperMC's repository (includes snapshots/releases)
+  maven { url = 'https://repo.papermc.io/repository/maven-public/' }
 }
 
 dependencies {

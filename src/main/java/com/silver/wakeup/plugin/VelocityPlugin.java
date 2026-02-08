@@ -8,8 +8,10 @@ import com.silver.wakeup.portal.PortalCommandHandler.HoldingConnection;
 import com.silver.wakeup.portal.PortalHandoffService;
 import com.silver.wakeup.portal.PortalTokenVerifier;
 import com.silver.wakeup.state.PlayerStateStore;
+import com.silver.wakeup.config.ReturnSpecial;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.command.CommandExecuteEvent;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
@@ -24,6 +26,10 @@ import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,7 +40,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Main Velocity proxy plugin for lobby management and player state tracking.
@@ -54,6 +62,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Plugin(id = "wakeuplobby", name = "WakeUpLobby", version = "1.3.0")
 public class VelocityPlugin {
+    static final String MPDS_REMOVE_SELF_COMMAND = "mpdsremovecustomidself";
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDir;
@@ -69,9 +78,131 @@ public class VelocityPlugin {
     private static final MinecraftChannelIdentifier PORTAL_HANDOFF_CHANNEL =
         MinecraftChannelIdentifier.from("serverportals:portal_handoff");
 
+    private static final MinecraftChannelIdentifier MPDS_RETURN_REMOVE_CHANNEL =
+        MinecraftChannelIdentifier.from("mpds:return_remove");
+
+    record ReturnRemoveResponse(boolean success,
+                                int removedInventory,
+                                int removedDb,
+                                int remainingInventory,
+                                int remainingDb,
+                                String error) {
+    }
+
+    private final Map<UUID, CompletableFuture<ReturnRemoveResponse>> pendingReturnRemovals = new ConcurrentHashMap<>();
+
     // persistence
     private final Map<UUID, String> lastServer = new ConcurrentHashMap<>();
     private final Map<UUID, Set<String>> visited = new ConcurrentHashMap<>();
+    private final Map<UUID, String> lastListedServer = new ConcurrentHashMap<>();
+
+    public String computeReturnDestination(UUID playerId) {
+        LobbyConfig cfg = runtime == null ? null : runtime.currentConfig();
+        List<String> order = cfg == null ? List.of() : cfg.returnServerOrder();
+        if (order.isEmpty()) {
+            return firstDefault();
+        }
+
+        String lastListed = lastListedServer.get(playerId);
+        String candidate = firstMatchingIgnoreCase(order, lastListed).orElse(order.get(0));
+
+        String last = lastServer.get(playerId);
+        if (last != null && candidate.equalsIgnoreCase(last)) {
+            int idx = indexOfIgnoreCase(order, candidate);
+            if (idx > 0) {
+                return order.get(idx - 1);
+            }
+            return order.get(0);
+        }
+
+        return candidate;
+    }
+
+    public List<String> computeReturnLossDisplayNames(UUID playerId) {
+        if (runtime == null) {
+            return List.of();
+        }
+
+        // Loss list should be based on the server we're giving up on (/return away from),
+        // which is the sticky-wait target that grace expired on.
+        String serverKey = runtime.stickyRouter().returnTargetServer(playerId);
+        if (serverKey == null || serverKey.isBlank()) {
+            serverKey = runtime.stickyRouter().returnOriginServer(playerId);
+        }
+        if (serverKey == null || serverKey.isBlank()) {
+            return List.of();
+        }
+
+        LobbyConfig cfg = runtime.currentConfig();
+        if (cfg == null) {
+            return List.of();
+        }
+
+        for (var entry : cfg.returnSpecials().entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(serverKey)) {
+                return entry.getValue().stream().map(s -> s.displayName()).toList();
+            }
+        }
+        return List.of();
+    }
+
+    List<ReturnSpecial> computeReturnSpecials(UUID playerId) {
+        if (runtime == null) {
+            return List.of();
+        }
+
+        String serverKey = runtime.stickyRouter().returnTargetServer(playerId);
+        if (serverKey == null || serverKey.isBlank()) {
+            serverKey = runtime.stickyRouter().returnOriginServer(playerId);
+        }
+        if (serverKey == null || serverKey.isBlank()) {
+            return List.of();
+        }
+
+        LobbyConfig cfg = runtime.currentConfig();
+        if (cfg == null) {
+            return List.of();
+        }
+
+        for (var entry : cfg.returnSpecials().entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(serverKey)) {
+                return entry.getValue();
+            }
+        }
+        return List.of();
+    }
+
+    public String formatLossList(List<String> displayNames) {
+        if (displayNames == null || displayNames.isEmpty()) {
+            return "nothing";
+        }
+        return displayNames.stream().collect(Collectors.joining(", "));
+    }
+
+    private static Optional<String> firstMatchingIgnoreCase(List<String> candidates, String value) {
+        if (value == null) {
+            return Optional.empty();
+        }
+        for (String c : candidates) {
+            if (c != null && c.equalsIgnoreCase(value)) {
+                return Optional.of(c);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static int indexOfIgnoreCase(List<String> list, String value) {
+        if (value == null) {
+            return -1;
+        }
+        for (int i = 0; i < list.size(); i++) {
+            String s = list.get(i);
+            if (s != null && s.equalsIgnoreCase(value)) {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     @Inject
     public VelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDir) {
@@ -83,6 +214,9 @@ public class VelocityPlugin {
     @Subscribe
     public void onInit(ProxyInitializeEvent e) {
         try {
+            proxy.getChannelRegistrar().register(PORTAL_HANDOFF_CHANNEL);
+            proxy.getChannelRegistrar().register(MPDS_RETURN_REMOVE_CHANNEL);
+
             configLoader = new LobbyConfigLoader(logger, dataDir);
             configLoader.ensureDefaultConfig();
             portalTokenVerifier = new PortalTokenVerifier(logger);
@@ -99,14 +233,110 @@ public class VelocityPlugin {
             portalCommandHandler = new PortalCommandHandler(logger, new VelocityPortalCommandDependencies());
             commandRegistrar = new CommandRegistrar(proxy, runtime, portalCommandHandler, this, logger);
 
-            logger.info("[WakeUpLobby] Loaded. Holding={}, grace={}s, interval={}s, fallback={}",
+            logger.info("[WakeUpLobby] Loaded. Holding={}, grace={}s, interval={}s",
                     runtime.holdingServer(),
                     config.graceSec(),
-                    config.pingEverySec(),
-                    config.fallbackPolicy());
+                    config.pingEverySec());
         } catch (Exception ex) {
             logger.error("Failed to initialize WakeUpLobby", ex);
         }
+    }
+
+    @Subscribe
+    public void onPluginMessage(PluginMessageEvent event) {
+        if (!event.getIdentifier().equals(MPDS_RETURN_REMOVE_CHANNEL)) {
+            return;
+        }
+
+        byte[] data = event.getData();
+        try (var in = new DataInputStream(new ByteArrayInputStream(data))) {
+            long msb = in.readLong();
+            long lsb = in.readLong();
+            UUID requestId = new UUID(msb, lsb);
+
+            boolean success = in.readBoolean();
+            int removedInv = in.readInt();
+            int removedDb = in.readInt();
+            int remainingInv = in.readInt();
+            int remainingDb = in.readInt();
+            String error = readStringBytes(in, 8192);
+
+            CompletableFuture<ReturnRemoveResponse> fut = pendingReturnRemovals.remove(requestId);
+            if (fut != null) {
+                fut.complete(new ReturnRemoveResponse(success, removedInv, removedDb, remainingInv, remainingDb, error));
+            }
+        } catch (Exception ex) {
+            logger.warn("[WakeUpLobby] Failed parsing mpds:return_remove response: {}", ex.toString());
+        }
+
+        // This is a proxy-internal control message; do not forward to the client.
+        try {
+            event.setResult(PluginMessageEvent.ForwardResult.handled());
+        } catch (Throwable ignored) {
+            // Older Velocity API variants may not expose ForwardResult; safe to ignore.
+        }
+    }
+
+    CompletableFuture<ReturnRemoveResponse> requestMpdsReturnRemoval(Player player, List<ReturnSpecial> specials) {
+        if (player == null || specials == null || specials.isEmpty()) {
+            return CompletableFuture.completedFuture(new ReturnRemoveResponse(true, 0, 0, 0, 0, ""));
+        }
+
+        var current = player.getCurrentServer();
+        if (current.isEmpty()) {
+            return CompletableFuture.completedFuture(new ReturnRemoveResponse(false, 0, 0, 0, 0, "Not connected to a server"));
+        }
+
+        UUID requestId = UUID.randomUUID();
+        CompletableFuture<ReturnRemoveResponse> fut = new CompletableFuture<>();
+        pendingReturnRemovals.put(requestId, fut);
+
+        byte[] payload;
+        try (var bos = new ByteArrayOutputStream(); var out = new DataOutputStream(bos)) {
+            out.writeLong(requestId.getMostSignificantBits());
+            out.writeLong(requestId.getLeastSignificantBits());
+            out.writeInt(Math.min(specials.size(), 32));
+            for (int i = 0; i < specials.size() && i < 32; i++) {
+                ReturnSpecial spec = specials.get(i);
+                writeStringBytes(out, spec.key(), 128);
+                writeStringBytes(out, spec.value(), 256);
+            }
+            out.flush();
+            payload = bos.toByteArray();
+        } catch (Exception ex) {
+            pendingReturnRemovals.remove(requestId);
+            return CompletableFuture.completedFuture(new ReturnRemoveResponse(false, 0, 0, 0, 0, "Encode failed: " + ex));
+        }
+
+        boolean sent = current.get().sendPluginMessage(MPDS_RETURN_REMOVE_CHANNEL, payload);
+        if (!sent) {
+            pendingReturnRemovals.remove(requestId);
+            return CompletableFuture.completedFuture(new ReturnRemoveResponse(false, 0, 0, 0, 0, "Server did not accept plugin message"));
+        }
+
+        return fut.orTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .exceptionally(ex -> {
+                    pendingReturnRemovals.remove(requestId);
+                    return new ReturnRemoveResponse(false, 0, 0, 0, 0, "Timeout waiting for MPDS confirmation");
+                });
+    }
+
+    private static void writeStringBytes(DataOutputStream out, String value, int maxLen) throws IOException {
+        byte[] bytes = value == null ? new byte[0] : value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (bytes.length > maxLen) {
+            throw new IllegalArgumentException("String too long: " + bytes.length);
+        }
+        out.writeInt(bytes.length);
+        out.write(bytes);
+    }
+
+    private static String readStringBytes(DataInputStream in, int maxLen) throws IOException {
+        int len = in.readInt();
+        if (len < 0 || len > maxLen) {
+            throw new IllegalArgumentException("Bad string length: " + len);
+        }
+        byte[] bytes = in.readNBytes(len);
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Subscribe
@@ -212,7 +442,7 @@ public class VelocityPlugin {
         logger.info("[WakeUpLobby] onPreConnect: player={} requested={} preferred={}", 
                    player.getUsername(), requested, preferred);
 
-        // Allow plugin-internal switches (auto-move on ready or /fallback)
+        // Allow plugin-internal switches (auto-move on ready)
         if (runtime.stickyRouter().consumeInternalOnce(player.getUniqueId())) {
             logger.info("[WakeUpLobby] onPreConnect: {} internal switch -> '{}' (ALLOWED)", player.getUsername(), requested);
             return;
@@ -220,6 +450,16 @@ public class VelocityPlugin {
 
         boolean isAdmin = hasBypass(player); // wakeuplobby.bypass
         logger.info("[WakeUpLobby] onPreConnect: player={} isAdmin={}", player.getUsername(), isAdmin);
+
+        // If an admin manually requests a server while a sticky-wait is in progress, cancel the sticky-wait.
+        // Otherwise the background sticky router can keep attempting to connect and effectively override manual /server.
+        if (isAdmin
+                && !requested.equalsIgnoreCase(runtime.holdingServer())
+                && runtime.stickyRouter().hasStickyState(player.getUniqueId())) {
+            logger.info("[WakeUpLobby] onPreConnect: {} admin manual request '{}' while sticky-wait active; cancelling sticky-wait",
+                    player.getUsername(), requested);
+            runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
+        }
 
         // Block /server for non-admins (manual server switch = not preferred and not holding)
         if (!isAdmin && !requested.equalsIgnoreCase(preferred) && !requested.equalsIgnoreCase(runtime.holdingServer())) {
@@ -314,7 +554,8 @@ public class VelocityPlugin {
 
         boolean allowedBasic = parts[0].equals("w")
                 || parts[0].equals("msg")
-                || parts[0].equals("teammsg");
+            || parts[0].equals("teammsg")
+            || parts[0].equals("return");
         boolean allowedPortal = parts[0].equals("wl") && parts.length >= 2 && parts[1].equals("portal");
 
         if (allowedBasic || allowedPortal) {
@@ -335,6 +576,8 @@ public class VelocityPlugin {
         logger.info("[WakeUpLobby] onConnected: player={} server={}", p.getUsername(), srv);
 
         if (!srv.equalsIgnoreCase(runtime.holdingServer())) {
+            runtime.stickyRouter().clearReturnEligibility(p.getUniqueId());
+
             visited.computeIfAbsent(p.getUniqueId(), k -> new HashSet<>()).add(srv);
             logger.info("[WakeUpLobby] onConnected: added '{}' to visited set for {}", srv, p.getUsername());
             proxy.getScheduler().buildTask(this, this::saveVisited).delay(Duration.ofSeconds(1)).schedule();
@@ -343,6 +586,13 @@ public class VelocityPlugin {
             proxy.getScheduler().buildTask(this, this::saveStore).delay(Duration.ofSeconds(1)).schedule();
 
             logger.info("[WakeUpLobby] onConnected: {} now last='{}'", p.getUsername(), srv);
+
+            LobbyConfig cfg = runtime.currentConfig();
+            if (cfg != null && cfg.returnServerOrder().stream().anyMatch(s -> s.equalsIgnoreCase(srv))) {
+                lastListedServer.put(p.getUniqueId(), srv);
+                proxy.getScheduler().buildTask(this, this::saveLastListed).delay(Duration.ofSeconds(1)).schedule();
+                logger.info("[WakeUpLobby] onConnected: {} lastListed='{}'", p.getUsername(), srv);
+            }
         } else {
             logger.info("[WakeUpLobby] onConnected: {} connected to holding '{}', not recording as last/visited",
                     p.getUsername(), srv);
@@ -356,6 +606,9 @@ public class VelocityPlugin {
         lastServer.putAll(stateStore.loadLastServers());
         visited.clear();
         visited.putAll(stateStore.loadVisitedServers());
+
+        lastListedServer.clear();
+        lastListedServer.putAll(stateStore.loadLastListedServers());
     }
 
     private boolean hasBypass(Player p) {
@@ -383,7 +636,7 @@ public class VelocityPlugin {
         return max;
     }
 
-    /** Allowed fallbacks in descending order: [tier, tier-1, ..., 0]. New players => [def[0]] */
+    /** Allowed targets in descending order: [tier, tier-1, ..., 0]. New players => [def[0]]  */
     private List<String> allowedTargetsDownward(UUID who) {
         var def = runtime.groupMembers("default_group");
         var seen = visited.getOrDefault(who, Set.of());
@@ -442,6 +695,10 @@ public class VelocityPlugin {
 
     private void saveVisited() {
         stateStore.saveVisitedServers(visited);
+    }
+
+    private void saveLastListed() {
+        stateStore.saveLastListedServers(lastListedServer);
     }
 
     private void purgeHoldingFromStore() {

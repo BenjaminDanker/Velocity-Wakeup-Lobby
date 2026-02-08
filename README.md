@@ -9,10 +9,10 @@ A Velocity proxy plugin for sophisticated lobby management, player state trackin
 - **Player State Management** - Track player session state across servers with sticky routing
 - **Lobby System** - Route players through a configurable holding/lobby server during transitions
 - **Portal Integration** - Support for ServerPortals-style handoff mechanisms with token verification
-- **Graceful Transitions** - Configurable grace periods and fallback policies for server unavailability
+- **Graceful Transitions** - Configurable grace periods for server startup/unavailability
 - **Wake Service** - Keep servers alive with configurable ping intervals
 - **Admin Commands** - Portal control commands for administrative operations
-- **Flexible Routing** - Group-based routing with configurable fallback policies
+- **Flexible Routing** - Group-based routing
 
 ## Demo
 
@@ -80,9 +80,6 @@ grace_sec: 300
 # Ping interval (seconds) to keep servers alive
 ping_every_sec: 30
 
-# Fallback policy when primary server is unavailable: LOBBY or WAIT
-fallback_policy: offer   # strict | offer | auto
-
 # Map server names to MAC addresses for wake-on-LAN
 server_to_mac:
   primary_server: "00:11:22:33:44:55"
@@ -132,7 +129,7 @@ Portal handoff is initiated by other plugins/servers and verified using cryptogr
 - **VelocityPlugin** - Main plugin entry point and event handlers
 - **RuntimeState** - Container for runtime services and configuration
 - **PlayerStateStore** - Manages player state across lobby/server transitions
-- **StickyRouter** - Routes players based on group membership and fallback policies
+- **StickyRouter** - Routes players based on group membership
 - **PortalHandoffService** - Manages secure player handoffs to other servers
 - **PortalTokenVerifier** - Verifies portal authentication tokens
 - **WakeService** - Handles wake-on-LAN and server pinging

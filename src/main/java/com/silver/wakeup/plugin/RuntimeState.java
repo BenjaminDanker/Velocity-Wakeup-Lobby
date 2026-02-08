@@ -36,7 +36,6 @@ public class RuntimeState {
     private String holdingServer = "waiting_lobby";
     private long graceSec = 90;
     private long pingEverySec = 2;
-    private StickyRouter.FallbackPolicy fallbackPolicy = StickyRouter.FallbackPolicy.OFFER;
     private final Map<String, List<String>> groups = new HashMap<>();
     private final Map<String, String> serverToMac = new HashMap<>();
     private Set<String> adminNames = Set.of();
@@ -60,7 +59,6 @@ public class RuntimeState {
         this.holdingServer = config.holdingServer();
         this.graceSec = config.graceSec();
         this.pingEverySec = config.pingEverySec();
-        this.fallbackPolicy = config.fallbackPolicy();
 
         this.serverToMac.clear();
         this.serverToMac.putAll(config.serverToMac());
@@ -83,7 +81,6 @@ public class RuntimeState {
                 holdingServer,
                 graceSec,
                 pingEverySec,
-                fallbackPolicy,
                 groups,
                 serverToMac,
                 wakeService,
@@ -95,8 +92,8 @@ public class RuntimeState {
 
         portalTokenVerifier.updateSecrets(config.globalPortalSecret(), config.perPortalSecrets());
 
-        logger.info("[WakeUpLobby] Config applied. Holding={}, grace={}s, interval={}s, fallback={}",
-                holdingServer, graceSec, pingEverySec, fallbackPolicy);
+        logger.info("[WakeUpLobby] Config applied. Holding={}, grace={}s, interval={}s",
+            holdingServer, graceSec, pingEverySec);
     }
 
     StickyRouter stickyRouter() {

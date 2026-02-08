@@ -1,6 +1,5 @@
 package com.silver.wakeup.config;
 
-import com.silver.wakeup.session.StickyRouter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
@@ -21,19 +20,19 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 Map.of("server1", "00:11:22:33:44:55"),
                 Map.of("group1", List.of("server1", "server2")),
                 Set.of("Admin"),
                 "global-secret",
-                Map.of("portal1", "secret1")
+                Map.of("portal1", "secret1"),
+                List.of("vanilla1", "magic"),
+                Map.of()
         );
 
         assertEquals("192.168.1.255", config.broadcastIp());
         assertEquals("lobby", config.holdingServer());
         assertEquals(300, config.graceSec());
         assertEquals(30, config.pingEverySec());
-        assertEquals(StickyRouter.FallbackPolicy.AUTO, config.fallbackPolicy());
     }
 
     @Test
@@ -45,11 +44,12 @@ class LobbyConfigTest {
                         "lobby",
                         300,
                         30,
-                        StickyRouter.FallbackPolicy.AUTO,
                         Map.of(),
                         Map.of(),
                         Set.of(),
                         "secret",
+                        Map.of(),
+                        List.of("vanilla1"),
                         Map.of()
                 )
         );
@@ -64,30 +64,12 @@ class LobbyConfigTest {
                         null,
                         300,
                         30,
-                        StickyRouter.FallbackPolicy.AUTO,
                         Map.of(),
                         Map.of(),
                         Set.of(),
                         "secret",
-                        Map.of()
-                )
-        );
-    }
-
-    @Test
-    @DisplayName("fallbackPolicy is required and cannot be null")
-    void fallbackPolicyRequired() {
-        assertThrows(NullPointerException.class, () ->
-                new LobbyConfig(
-                        "192.168.1.255",
-                        "lobby",
-                        300,
-                        30,
-                        null,
                         Map.of(),
-                        Map.of(),
-                        Set.of(),
-                        "secret",
+                        List.of("vanilla1"),
                         Map.of()
                 )
         );
@@ -102,11 +84,12 @@ class LobbyConfigTest {
                         "lobby",
                         300,
                         30,
-                        StickyRouter.FallbackPolicy.AUTO,
                         Map.of(),
                         Map.of(),
                         Set.of(),
                         null,
+                        Map.of(),
+                        List.of("vanilla1"),
                         Map.of()
                 )
         );
@@ -121,12 +104,13 @@ class LobbyConfigTest {
                         "lobby",
                         300,
                         30,
-                        StickyRouter.FallbackPolicy.AUTO,
                         Map.of(),
                         Map.of(),
                         Set.of(),
                         "secret",
-                        null
+                        null,
+                        List.of("vanilla1"),
+                        Map.of()
                 )
         );
     }
@@ -142,11 +126,12 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 original,
                 Map.of(),
                 Set.of(),
                 "secret",
+                Map.of(),
+                List.of("vanilla1"),
                 Map.of()
         );
 
@@ -170,11 +155,12 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 Map.of(),
                 original,
                 Set.of(),
                 "secret",
+                Map.of(),
+                List.of("vanilla1"),
                 Map.of()
         );
 
@@ -198,11 +184,12 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 Map.of(),
                 Map.of(),
                 original,
                 "secret",
+                Map.of(),
+                List.of("vanilla1"),
                 Map.of()
         );
 
@@ -226,12 +213,13 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 Map.of(),
                 Map.of(),
                 Set.of(),
                 "global-secret",
-                original
+                original,
+                List.of("vanilla1"),
+                Map.of()
         );
 
         // Verify that the map retrieved is immutable
@@ -249,11 +237,12 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 Map.of("server1", "00:11:22:33:44:55"),
                 Map.of("group1", List.of("server1")),
                 Set.of("Admin"),
                 "secret",
+                Map.of(),
+                List.of("vanilla1"),
                 Map.of()
         );
 
@@ -274,19 +263,19 @@ class LobbyConfigTest {
                 "lobby",
                 300,
                 30,
-                StickyRouter.FallbackPolicy.AUTO,
                 serverToMac,
                 groups,
                 adminNames,
                 "global-secret",
-                perPortalSecrets
+                perPortalSecrets,
+                List.of("vanilla1", "magic"),
+                Map.of()
         );
 
         assertEquals("192.168.1.255", config.broadcastIp());
         assertEquals("lobby", config.holdingServer());
         assertEquals(300, config.graceSec());
         assertEquals(30, config.pingEverySec());
-        assertEquals(StickyRouter.FallbackPolicy.AUTO, config.fallbackPolicy());
         assertEquals(serverToMac, config.serverToMac());
         assertEquals(groups, config.groups());
         assertEquals(adminNames, config.adminNames());
