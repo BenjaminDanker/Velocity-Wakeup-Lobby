@@ -2,6 +2,7 @@ package com.silver.wakeup.plugin;
 
 import com.silver.wakeup.config.LobbyConfig;
 import com.silver.wakeup.portal.PortalHandoffService;
+import com.silver.wakeup.portal.PortalRequestVerifier;
 import com.silver.wakeup.portal.PortalTokenVerifier;
 import com.silver.wakeup.session.StickyRouter;
 import com.silver.wakeup.wake.WakeService;
@@ -31,6 +32,7 @@ public class RuntimeState {
     private final Logger logger;
     private final PortalHandoffService portalHandoffService;
     private final PortalTokenVerifier portalTokenVerifier;
+    private final PortalRequestVerifier portalRequestVerifier;
 
     private LobbyConfig currentConfig;
     private String holdingServer = "waiting_lobby";
@@ -46,12 +48,14 @@ public class RuntimeState {
                         VelocityPlugin plugin,
                         Logger logger,
                         PortalHandoffService portalHandoffService,
-                        PortalTokenVerifier portalTokenVerifier) {
+                        PortalTokenVerifier portalTokenVerifier,
+                        PortalRequestVerifier portalRequestVerifier) {
         this.proxy = proxy;
         this.plugin = plugin;
         this.logger = logger;
         this.portalHandoffService = portalHandoffService;
         this.portalTokenVerifier = portalTokenVerifier;
+        this.portalRequestVerifier = portalRequestVerifier;
     }
 
     void applyConfig(LobbyConfig config, Function<UUID, List<String>> allowedTargetsDownward) throws IOException {
@@ -91,6 +95,7 @@ public class RuntimeState {
         );
 
         portalTokenVerifier.updateSecrets(config.globalPortalSecret(), config.perPortalSecrets());
+        portalRequestVerifier.updateSecrets(config.backendPortalRequestSecrets());
 
         logger.info("[WakeUpLobby] Config applied. Holding={}, grace={}s, interval={}s",
             holdingServer, graceSec, pingEverySec);
@@ -118,5 +123,9 @@ public class RuntimeState {
 
     PortalTokenVerifier portalTokenVerifier() {
         return portalTokenVerifier;
+    }
+
+    PortalRequestVerifier portalRequestVerifier() {
+        return portalRequestVerifier;
     }
 }

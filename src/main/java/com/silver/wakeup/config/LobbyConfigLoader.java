@@ -55,6 +55,13 @@ ping_every_sec: 2
 portal_secret: ""
 portal_secrets:
         cave: ""
+
+# Backend -> proxy portal request authentication.
+# Each backend server that can initiate a portal transfer MUST have a shared secret here.
+# Key: the Velocity server name (e.g. "vanilla1"). Value: a long random string.
+# You can also use a wildcard entry "*" to apply the same secret to all backends.
+backend_portal_request_secrets:
+    "*": ""
 servers:
     vanilla1: "mac_address"
 groups:
@@ -113,6 +120,8 @@ return_specials:
         Map<String, String> perPortalSecrets = parsePerPortalSecrets(root.get("portal_secrets"));
         String globalSecret = stringOrDefault(root.get("portal_secret"), "").trim();
 
+        Map<String, String> backendPortalRequestSecrets = parsePerPortalSecrets(root.get("backend_portal_request_secrets"));
+
         List<String> returnServers = parseStringList(root.get("return_servers"), List.of("vanilla1", "magic"));
         Map<String, List<ReturnSpecial>> returnSpecials = parseReturnSpecials(root.get("return_specials"));
 
@@ -126,6 +135,7 @@ return_specials:
                 adminNames,
                 globalSecret,
                 perPortalSecrets,
+            backendPortalRequestSecrets,
                 returnServers,
                 returnSpecials
         );

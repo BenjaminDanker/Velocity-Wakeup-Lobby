@@ -25,6 +25,7 @@ class LobbyConfigTest {
                 Set.of("Admin"),
                 "global-secret",
                 Map.of("portal1", "secret1"),
+                Map.of("vanilla1", "backend-secret"),
                 List.of("vanilla1", "magic"),
                 Map.of()
         );
@@ -49,6 +50,7 @@ class LobbyConfigTest {
                         Set.of(),
                         "secret",
                         Map.of(),
+                        Map.of(),
                         List.of("vanilla1"),
                         Map.of()
                 )
@@ -68,6 +70,7 @@ class LobbyConfigTest {
                         Map.of(),
                         Set.of(),
                         "secret",
+                        Map.of(),
                         Map.of(),
                         List.of("vanilla1"),
                         Map.of()
@@ -89,6 +92,7 @@ class LobbyConfigTest {
                         Set.of(),
                         null,
                         Map.of(),
+                        Map.of(),
                         List.of("vanilla1"),
                         Map.of()
                 )
@@ -109,6 +113,7 @@ class LobbyConfigTest {
                         Set.of(),
                         "secret",
                         null,
+                        Map.of(),
                         List.of("vanilla1"),
                         Map.of()
                 )
@@ -130,6 +135,7 @@ class LobbyConfigTest {
                 Map.of(),
                 Set.of(),
                 "secret",
+                Map.of(),
                 Map.of(),
                 List.of("vanilla1"),
                 Map.of()
@@ -160,6 +166,7 @@ class LobbyConfigTest {
                 Set.of(),
                 "secret",
                 Map.of(),
+                Map.of(),
                 List.of("vanilla1"),
                 Map.of()
         );
@@ -188,6 +195,7 @@ class LobbyConfigTest {
                 Map.of(),
                 original,
                 "secret",
+                Map.of(),
                 Map.of(),
                 List.of("vanilla1"),
                 Map.of()
@@ -218,6 +226,7 @@ class LobbyConfigTest {
                 Set.of(),
                 "global-secret",
                 original,
+                Map.of(),
                 List.of("vanilla1"),
                 Map.of()
         );
@@ -241,6 +250,7 @@ class LobbyConfigTest {
                 Map.of("group1", List.of("server1")),
                 Set.of("Admin"),
                 "secret",
+                Map.of(),
                 Map.of(),
                 List.of("vanilla1"),
                 Map.of()
@@ -268,6 +278,7 @@ class LobbyConfigTest {
                 adminNames,
                 "global-secret",
                 perPortalSecrets,
+                Map.of(),
                 List.of("vanilla1", "magic"),
                 Map.of()
         );

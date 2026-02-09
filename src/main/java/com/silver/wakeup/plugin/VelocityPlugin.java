@@ -6,6 +6,8 @@ import com.silver.wakeup.config.LobbyConfigLoader;
 import com.silver.wakeup.portal.PortalCommandHandler;
 import com.silver.wakeup.portal.PortalCommandHandler.HoldingConnection;
 import com.silver.wakeup.portal.PortalHandoffService;
+import com.silver.wakeup.portal.PortalRequestPayloadCodec;
+import com.silver.wakeup.portal.PortalRequestVerifier;
 import com.silver.wakeup.portal.PortalTokenVerifier;
 import com.silver.wakeup.state.PlayerStateStore;
 import com.silver.wakeup.config.ReturnSpecial;
@@ -21,6 +23,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
@@ -74,9 +77,13 @@ public class VelocityPlugin {
     private PortalHandoffService portalHandoffService;
     private PortalCommandHandler portalCommandHandler;
     private PortalTokenVerifier portalTokenVerifier;
+    private PortalRequestVerifier portalRequestVerifier;
     private CommandRegistrar commandRegistrar;
     private static final MinecraftChannelIdentifier PORTAL_HANDOFF_CHANNEL =
         MinecraftChannelIdentifier.from("serverportals:portal_handoff");
+
+    private static final MinecraftChannelIdentifier PORTAL_REQUEST_CHANNEL =
+        MinecraftChannelIdentifier.from("wakeuplobby:portal_request");
 
     private static final MinecraftChannelIdentifier MPDS_RETURN_REMOVE_CHANNEL =
         MinecraftChannelIdentifier.from("mpds:return_remove");
@@ -215,13 +222,15 @@ public class VelocityPlugin {
     public void onInit(ProxyInitializeEvent e) {
         try {
             proxy.getChannelRegistrar().register(PORTAL_HANDOFF_CHANNEL);
+            proxy.getChannelRegistrar().register(PORTAL_REQUEST_CHANNEL);
             proxy.getChannelRegistrar().register(MPDS_RETURN_REMOVE_CHANNEL);
 
             configLoader = new LobbyConfigLoader(logger, dataDir);
             configLoader.ensureDefaultConfig();
             portalTokenVerifier = new PortalTokenVerifier(logger);
             portalHandoffService = new PortalHandoffService(logger);
-            runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier);
+            portalRequestVerifier = new PortalRequestVerifier(logger);
+            runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
             stateStore = new PlayerStateStore(dataDir, logger);
 
             loadPlayerState();
@@ -244,6 +253,11 @@ public class VelocityPlugin {
 
     @Subscribe
     public void onPluginMessage(PluginMessageEvent event) {
+        if (event.getIdentifier().equals(PORTAL_REQUEST_CHANNEL)) {
+            handlePortalRequestMessage(event);
+            return;
+        }
+
         if (!event.getIdentifier().equals(MPDS_RETURN_REMOVE_CHANNEL)) {
             return;
         }
@@ -274,6 +288,77 @@ public class VelocityPlugin {
             event.setResult(PluginMessageEvent.ForwardResult.handled());
         } catch (Throwable ignored) {
             // Older Velocity API variants may not expose ForwardResult; safe to ignore.
+        }
+    }
+
+    private void handlePortalRequestMessage(PluginMessageEvent event) {
+        try {
+            if (!(event.getSource() instanceof ServerConnection backendConn)) {
+                logger.warn("[WakeUpLobby] Ignoring portal_request from non-backend source: {}", event.getSource());
+                return;
+            }
+
+            String backendName = backendConn.getServerInfo().getName();
+            var requestOpt = PortalRequestPayloadCodec.decode(event.getData());
+            if (requestOpt.isEmpty()) {
+                logger.warn("[WakeUpLobby] Invalid portal_request payload from backend {}", backendName);
+                return;
+            }
+
+            var request = requestOpt.get();
+            if (runtime == null || portalRequestVerifier == null) {
+                logger.warn("[WakeUpLobby] Portal request received before initialization completed (backend={})", backendName);
+                return;
+            }
+
+            if (!portalRequestVerifier.verify(backendName, request)) {
+                return;
+            }
+
+            var playerOpt = proxy.getPlayer(request.playerId());
+            if (playerOpt.isEmpty()) {
+                logger.warn("[WakeUpLobby] Portal request for offline player {} (backend={})", request.playerId(), backendName);
+                return;
+            }
+            Player player = playerOpt.get();
+
+            String target = request.targetServer();
+            var targetReg = proxy.getServer(target);
+            if (targetReg.isEmpty()) {
+                logger.warn("[WakeUpLobby] Portal request rejected: unknown target server '{}' (backend={})", target, backendName);
+                return;
+            }
+
+            String sourcePortal = request.sourcePortal();
+            if (sourcePortal != null && !sourcePortal.isBlank()) {
+                portalHandoffService.rememberSourcePortal(player.getUniqueId(), sourcePortal);
+            }
+
+            // Same behavior as /wl portal: unlock destination + sticky-wait through holding.
+            visited.computeIfAbsent(player.getUniqueId(), k -> new HashSet<>()).add(target);
+            lastServer.put(player.getUniqueId(), target);
+            saveVisited();
+            saveStore();
+
+            String origin = currentServerName(player).orElse(null);
+            runtime.stickyRouter().beginStickyWait(player.getUniqueId(), target, origin);
+            runtime.stickyRouter().markInternalOnce(player.getUniqueId());
+
+            var holdingReg = proxy.getServer(runtime.holdingServer());
+            if (holdingReg.isEmpty()) {
+                logger.error("[WakeUpLobby] Holding server '{}' not found; cannot process portal request", runtime.holdingServer());
+                return;
+            }
+
+            player.createConnectionRequest(holdingReg.get()).fireAndForget();
+        } catch (Exception ex) {
+            logger.warn("[WakeUpLobby] Failed handling portal_request: {}", ex.toString());
+        } finally {
+            // proxy-internal; do not forward to client
+            try {
+                event.setResult(PluginMessageEvent.ForwardResult.handled());
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -556,9 +641,7 @@ public class VelocityPlugin {
                 || parts[0].equals("msg")
             || parts[0].equals("teammsg")
             || parts[0].equals("return");
-        boolean allowedPortal = parts[0].equals("wl") && parts.length >= 2 && parts[1].equals("portal");
-
-        if (allowedBasic || allowedPortal) {
+        if (allowedBasic) {
             return;
         }
 

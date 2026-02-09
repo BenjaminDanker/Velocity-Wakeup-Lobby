@@ -20,6 +20,7 @@ public class LobbyConfig {
     private final Set<String> adminNames;
     private final String globalPortalSecret;
     private final Map<String, String> perPortalSecrets;
+    private final Map<String, String> backendPortalRequestSecrets;
 
     private final List<String> returnServerOrder;
     private final Map<String, List<ReturnSpecial>> returnSpecials;
@@ -34,6 +35,7 @@ public class LobbyConfig {
             Set<String> adminNames,
             String globalPortalSecret,
             Map<String, String> perPortalSecrets,
+                Map<String, String> backendPortalRequestSecrets,
             List<String> returnServerOrder,
             Map<String, List<ReturnSpecial>> returnSpecials
     ) {
@@ -46,6 +48,7 @@ public class LobbyConfig {
         this.adminNames = Collections.unmodifiableSet(Set.copyOf(adminNames));
         this.globalPortalSecret = Objects.requireNonNull(globalPortalSecret, "globalPortalSecret");
         this.perPortalSecrets = Collections.unmodifiableMap(Objects.requireNonNull(perPortalSecrets, "perPortalSecrets"));
+        this.backendPortalRequestSecrets = Collections.unmodifiableMap(copyMap(Objects.requireNonNull(backendPortalRequestSecrets, "backendPortalRequestSecrets")));
 
         this.returnServerOrder = List.copyOf(Objects.requireNonNull(returnServerOrder, "returnServerOrder"));
         this.returnSpecials = Collections.unmodifiableMap(copyReturnSpecials(returnSpecials));
@@ -85,6 +88,10 @@ public class LobbyConfig {
 
     public Map<String, String> perPortalSecrets() {
         return perPortalSecrets;
+    }
+
+    public Map<String, String> backendPortalRequestSecrets() {
+        return backendPortalRequestSecrets;
     }
 
     public List<String> returnServerOrder() {
