@@ -183,11 +183,11 @@ final class StickySessionManager {
                 String lossList = plugin.formatLossList(plugin.computeReturnLossDisplayNames(playerId));
                 if (dest == null || dest.isBlank()) {
                     player.sendMessage(Component.text(
-                            "⚠ Server may be down. You can try reconnecting or use /return. Using /return will remove all " + lossList + "."));
+                            "⚠ Server may be down. You can try reconnecting or use /return. Using /return will remove " + lossList + "."));
                 } else {
                     player.sendMessage(Component.text(
                             "⚠ Server may be down. You can try reconnecting or use /return to go back to " + dest
-                                    + ". Using /return will remove all " + lossList + "."));
+                                    + ". Using /return will remove " + lossList + "."));
                 }
 
                 cleanupStickyState(playerId);
