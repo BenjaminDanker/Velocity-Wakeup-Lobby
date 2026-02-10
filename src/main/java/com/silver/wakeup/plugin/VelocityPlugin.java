@@ -88,6 +88,9 @@ public class VelocityPlugin {
     private static final MinecraftChannelIdentifier MPDS_RETURN_REMOVE_CHANNEL =
         MinecraftChannelIdentifier.from("mpds:return_remove");
 
+    private static final MinecraftChannelIdentifier RETURN_OVERWORLD_CHANNEL =
+        MinecraftChannelIdentifier.from("wakeuplobby:return_overworld");
+
     record ReturnRemoveResponse(boolean success,
                                 int removedInventory,
                                 int removedDb,
@@ -224,6 +227,7 @@ public class VelocityPlugin {
             proxy.getChannelRegistrar().register(PORTAL_HANDOFF_CHANNEL);
             proxy.getChannelRegistrar().register(PORTAL_REQUEST_CHANNEL);
             proxy.getChannelRegistrar().register(MPDS_RETURN_REMOVE_CHANNEL);
+            proxy.getChannelRegistrar().register(RETURN_OVERWORLD_CHANNEL);
 
             configLoader = new LobbyConfigLoader(logger, dataDir);
             configLoader.ensureDefaultConfig();
@@ -422,6 +426,32 @@ public class VelocityPlugin {
         }
         byte[] bytes = in.readNBytes(len);
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    void requestReturnOverworldIfNeeded(Player player, String destServer, String originServer) {
+        if (player == null || destServer == null || destServer.isBlank() || runtime == null) {
+            return;
+        }
+
+        if (originServer == null || !originServer.equalsIgnoreCase(destServer)) {
+            return;
+        }
+
+        var current = player.getCurrentServer();
+        if (current.isEmpty() || current.get().getServerInfo() == null) {
+            return;
+        }
+
+        String currentName = current.get().getServerInfo().getName();
+        if (!currentName.equalsIgnoreCase(destServer)) {
+            return;
+        }
+
+        current.get().sendPluginMessage(RETURN_OVERWORLD_CHANNEL, new byte[0]);
+        logger.info("[WakeUpLobby] Requested overworld return for {} on server {} (origin={})",
+            player.getUsername(),
+            destServer,
+            originServer);
     }
 
     @Subscribe

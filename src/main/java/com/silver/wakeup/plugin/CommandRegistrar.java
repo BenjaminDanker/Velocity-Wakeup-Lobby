@@ -224,6 +224,7 @@ public class CommandRegistrar {
 
                         var specialsToRemove = plugin.computeReturnSpecials(player.getUniqueId());
                         player.sendMessage(Component.text("§eReturning you to §a" + dest + "§e…"));
+                        String returnOrigin = runtime.stickyRouter().returnOriginServer(player.getUniqueId());
 
                         // If we have specials to remove, do it BEFORE switching servers and confirm they're gone.
                         if (!specialsToRemove.isEmpty()) {
@@ -247,20 +248,25 @@ public class CommandRegistrar {
                                 player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                                     if (err != null || result == null || !result.isSuccessful()) {
                                         player.sendMessage(Component.text("⚠ Failed to connect to " + dest + "."));
+                                        return;
                                     }
+                                    plugin.requestReturnOverworldIfNeeded(player, dest, returnOrigin);
                                 });
                             });
                             return;
                         }
 
                         // No specials; return immediately.
+                        String returnOriginImmediate = runtime.stickyRouter().returnOriginServer(player.getUniqueId());
                         runtime.stickyRouter().clearReturnEligibility(player.getUniqueId());
                         runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
                         runtime.stickyRouter().markInternalOnce(player.getUniqueId());
                         player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                             if (err != null || result == null || !result.isSuccessful()) {
                                 player.sendMessage(Component.text("⚠ Failed to connect to " + dest + "."));
+                                return;
                             }
+                            plugin.requestReturnOverworldIfNeeded(player, dest, returnOriginImmediate);
                         });
                     }
                 }
