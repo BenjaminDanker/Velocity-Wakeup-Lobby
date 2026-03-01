@@ -81,7 +81,9 @@ public class VelocityPlugin {
     private PortalTokenVerifier portalTokenVerifier;
     private PortalRequestVerifier portalRequestVerifier;
     private VelocityOpsStore velocityOpsStore;
+    private WhitelistStore whitelistStore;
     private CommandRegistrar commandRegistrar;
+    private SecurityManager securityManager;
     private static final MinecraftChannelIdentifier PORTAL_HANDOFF_CHANNEL =
         MinecraftChannelIdentifier.from("serverportals:portal_handoff");
 
@@ -239,6 +241,10 @@ public class VelocityPlugin {
             portalRequestVerifier = new PortalRequestVerifier(logger);
             velocityOpsStore = new VelocityOpsStore(dataDir, logger);
             velocityOpsStore.ensureFileAndLoad();
+            whitelistStore = new WhitelistStore(dataDir, logger);
+            whitelistStore.ensureFileAndLoad();
+            securityManager = new SecurityManager(logger, whitelistStore);
+            proxy.getEventManager().register(this, securityManager);
             runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
             stateStore = new PlayerStateStore(dataDir, logger);
 
@@ -750,6 +756,34 @@ public class VelocityPlugin {
             return false;
         }
         return velocityOpsStore.remove(username);
+    }
+
+    List<UUID> listWhitelist() {
+        if (whitelistStore == null) {
+            return List.of();
+        }
+        return whitelistStore.list();
+    }
+
+    boolean isWhitelisted(UUID uuid) {
+        if (whitelistStore == null) {
+            return false;
+        }
+        return whitelistStore.isWhitelisted(uuid);
+    }
+
+    boolean addWhitelist(UUID uuid) throws IOException {
+        if (whitelistStore == null) {
+            return false;
+        }
+        return whitelistStore.add(uuid);
+    }
+
+    boolean removeWhitelist(UUID uuid) throws IOException {
+        if (whitelistStore == null) {
+            return false;
+        }
+        return whitelistStore.remove(uuid);
     }
 
     List<String> listVelocityOps() {

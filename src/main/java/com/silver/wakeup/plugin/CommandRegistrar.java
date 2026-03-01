@@ -14,19 +14,21 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Centralises registration and handling for all WakeUpLobby commands.
  */
 public class CommandRegistrar {
     private static final String SERVER_PERMISSION = "wakeuplobby.server";
-    private static final String WAKEUPLOBBY_USAGE = "§7Usage: /wakeuplobby reload | /wakeuplobby ops <list|add|remove> [player]";
+    private static final String WAKEUPLOBBY_USAGE = "§7Usage: /wakeuplobby reload | /wakeuplobby ops <list|add|remove> [player] | /wakeuplobby whitelist <list|add|remove> [player]";
 
     private final ProxyServer proxy;
     private final RuntimeState runtime;
     private final PortalCommandHandler portalCommandHandler;
     private final VelocityPlugin plugin;
     private final Logger logger;
+    private final UUIDResolver uuidResolver;
 
     private boolean registered;
 
@@ -40,6 +42,7 @@ public class CommandRegistrar {
         this.portalCommandHandler = portalCommandHandler;
         this.plugin = plugin;
         this.logger = logger;
+        this.uuidResolver = new UUIDResolver(proxy, logger);
     }
 
     void register() {
@@ -86,6 +89,11 @@ public class CommandRegistrar {
 
                     if (args[0].equalsIgnoreCase("ops")) {
                         handleOpsCommand(source, args);
+                        return;
+                    }
+
+                    if (args[0].equalsIgnoreCase("whitelist")) {
+                        handleWhitelistCommand(source, args);
                         return;
                     }
 
@@ -148,6 +156,89 @@ public class CommandRegistrar {
         } catch (IOException e) {
             logger.error("Failed to update velocity ops list", e);
             source.sendMessage(Component.text("§cFailed updating velocity ops list: " + e.getMessage()));
+        }
+    }
+
+    private void handleWhitelistCommand(CommandSource source, String[] args) {
+        if (!canManageWakeupLobby(source)) {
+            source.sendMessage(Component.text("§cYou do not have permission to use this command."));
+            return;
+        }
+
+        if (args.length < 2) {
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby whitelist <list|add|remove> [player]"));
+            return;
+        }
+
+        if (args[1].equalsIgnoreCase("list")) {
+            var uuids = plugin.listWhitelist();
+            if (uuids.isEmpty()) {
+                source.sendMessage(Component.text("§eWhitelist is empty."));
+            } else {
+                source.sendMessage(Component.text("§aWhitelist (" + uuids.size() + " player(s)):"));
+                // Resolve names asynchronously
+                for (UUID uuid : uuids) {
+                    uuidResolver.resolveName(uuid).thenAccept(nameOpt -> {
+                        String display = nameOpt.map(name -> "§f" + name + "§7 (" + uuid + ")")
+                                .orElse("§f" + uuid.toString());
+                        source.sendMessage(Component.text("  " + display));
+                    });
+                }
+            }
+            return;
+        }
+
+        if (args.length < 3) {
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby whitelist " + args[1].toLowerCase() + " <player>"));
+            return;
+        }
+
+        String target = args[2];
+        
+        // Try parsing as UUID first, then as player name
+        try {
+            java.util.UUID uuid = java.util.UUID.fromString(target);
+            // Direct UUID provided
+            handleWhitelistUUID(source, args[1], uuid, target);
+        } catch (IllegalArgumentException e) {
+            // Not a UUID, try resolving as player name
+            source.sendMessage(Component.text("§eResolving player '" + target + "'..."));
+            uuidResolver.resolveUUID(target).thenAccept(uuidOpt -> {
+                if (uuidOpt.isEmpty()) {
+                    source.sendMessage(Component.text("§cPlayer '" + target + "' not found. Player may not exist or Mojang API is unavailable."));
+                    return;
+                }
+                handleWhitelistUUID(source, args[1], uuidOpt.get(), target);
+            }).exceptionally(ex -> {
+                logger.error("Failed to resolve UUID for player '{}'", target, ex);
+                source.sendMessage(Component.text("§cFailed to resolve player '" + target + "': " + ex.getMessage()));
+                return null;
+            });
+        }
+    }
+
+    private void handleWhitelistUUID(CommandSource source, String action, UUID uuid, String originalInput) {
+        try {
+            if (action.equalsIgnoreCase("add")) {
+                boolean changed = plugin.addWhitelist(uuid);
+                source.sendMessage(Component.text(changed
+                        ? "§aAdded to whitelist: §f" + originalInput + "§7 (" + uuid + ")"
+                        : "§eAlready whitelisted: §f" + originalInput + "§7 (" + uuid + ")"));
+                return;
+            }
+
+            if (action.equalsIgnoreCase("remove")) {
+                boolean changed = plugin.removeWhitelist(uuid);
+                source.sendMessage(Component.text(changed
+                        ? "§aRemoved from whitelist: §f" + originalInput + "§7 (" + uuid + ")"
+                        : "§eNot in whitelist: §f" + originalInput + "§7 (" + uuid + ")"));
+                return;
+            }
+
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby whitelist <list|add|remove> [player]"));
+        } catch (IOException e) {
+            logger.error("Failed to update whitelist", e);
+            source.sendMessage(Component.text("§cFailed updating whitelist: " + e.getMessage()));
         }
     }
 
