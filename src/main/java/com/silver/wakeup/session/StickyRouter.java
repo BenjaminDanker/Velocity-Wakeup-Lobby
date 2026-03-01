@@ -42,7 +42,6 @@ public class StickyRouter {
             WakeService wakeService,
             Logger log,
             Function<UUID, List<String>> allowedListFn,
-            Set<String> adminNames,
             PortalHandoffService portalHandoffService
     ) {
         // Validate stored fields
@@ -56,7 +55,6 @@ public class StickyRouter {
         Objects.requireNonNull(wakeService, "wakeService");
         Objects.requireNonNull(groups, "groups");
         Objects.requireNonNull(allowedListFn, "allowedListFn");
-        Objects.requireNonNull(adminNames, "adminNames");
         Objects.requireNonNull(portalHandoffService, "portalHandoffService");
 
         this.sessionManager = new StickySessionManager(

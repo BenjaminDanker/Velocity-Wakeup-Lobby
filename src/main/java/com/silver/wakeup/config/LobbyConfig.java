@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -17,7 +16,6 @@ public class LobbyConfig {
     private final long pingEverySec;
     private final Map<String, String> serverToMac;
     private final Map<String, List<String>> groups;
-    private final Set<String> adminNames;
     private final String globalPortalSecret;
     private final Map<String, String> perPortalSecrets;
     private final Map<String, String> backendPortalRequestSecrets;
@@ -32,7 +30,6 @@ public class LobbyConfig {
             long pingEverySec,
             Map<String, String> serverToMac,
             Map<String, List<String>> groups,
-            Set<String> adminNames,
             String globalPortalSecret,
             Map<String, String> perPortalSecrets,
                 Map<String, String> backendPortalRequestSecrets,
@@ -45,7 +42,6 @@ public class LobbyConfig {
         this.pingEverySec = pingEverySec;
         this.serverToMac = Collections.unmodifiableMap(copyMap(serverToMac));
         this.groups = Collections.unmodifiableMap(copyGroups(groups));
-        this.adminNames = Collections.unmodifiableSet(Set.copyOf(adminNames));
         this.globalPortalSecret = Objects.requireNonNull(globalPortalSecret, "globalPortalSecret");
         this.perPortalSecrets = Collections.unmodifiableMap(Objects.requireNonNull(perPortalSecrets, "perPortalSecrets"));
         this.backendPortalRequestSecrets = Collections.unmodifiableMap(copyMap(Objects.requireNonNull(backendPortalRequestSecrets, "backendPortalRequestSecrets")));
@@ -76,10 +72,6 @@ public class LobbyConfig {
 
     public Map<String, List<String>> groups() {
         return groups;
-    }
-
-    public Set<String> adminNames() {
-        return adminNames;
     }
 
     public String globalPortalSecret() {

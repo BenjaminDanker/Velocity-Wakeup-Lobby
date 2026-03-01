@@ -10,28 +10,31 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
  * Proxies a command to a backend namespaced command while enforcing simple selector restrictions.
  */
 final class SanitizedForwardCommand implements SimpleCommand {
+    private static final String SELECTOR_PERMISSION = "wakeuplobby.selectors";
+
     private final ProxyServer proxy;
-    private final RuntimeState runtime;
     private final Logger logger;
+    private final Predicate<Player> bypassCheck;
     private final String backendLiteral;
     private final String displayLiteral;
     private final boolean requiresTarget;
 
     SanitizedForwardCommand(ProxyServer proxy,
-                            RuntimeState runtime,
                             Logger logger,
+                            Predicate<Player> bypassCheck,
                             String backendLiteral,
                             String displayLiteral,
                             boolean requiresTarget) {
         this.proxy = proxy;
-        this.runtime = runtime;
         this.logger = logger;
+        this.bypassCheck = bypassCheck;
         this.backendLiteral = backendLiteral;
         this.displayLiteral = displayLiteral;
         this.requiresTarget = requiresTarget;
@@ -50,8 +53,9 @@ final class SanitizedForwardCommand implements SimpleCommand {
             return;
         }
 
-        boolean isAdmin = runtime != null && runtime.isAdmin(player.getUsername().toLowerCase(Locale.ROOT));
-        if (!isAdmin && containsSelector(args)) {
+        boolean canUseSelectors = player.hasPermission(SELECTOR_PERMISSION)
+            || (bypassCheck != null && bypassCheck.test(player));
+        if (!canUseSelectors && containsSelector(args)) {
             player.sendMessage(Component.text("⚠ Selectors are not permitted in this command."));
             return;
         }

@@ -13,7 +13,6 @@ import org.slf4j.helpers.NOPLogger;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -60,7 +59,7 @@ class StickyRouterTest {
                 new StickyRouter(
                 null, plugin, "lobby", 300, 30,
                 groups, serverToMac,
-                        wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                wakeService, logger, allowedListFn, portalHandoffService
                 )
         );
 
@@ -68,7 +67,7 @@ class StickyRouterTest {
                 new StickyRouter(
             proxyServer, null, "lobby", 300, 30,
                 groups, serverToMac,
-                        wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                wakeService, logger, allowedListFn, portalHandoffService
                 )
         );
     }
@@ -110,7 +109,7 @@ class StickyRouterTest {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
                     Map.of(), serverToMac,
-                    wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                    wakeService, logger, allowedListFn, portalHandoffService
             ));
         }
 
@@ -120,23 +119,23 @@ class StickyRouterTest {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
                     groups, Map.of(),
-                    wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                    wakeService, logger, allowedListFn, portalHandoffService
             ));
         }
 
         @Test
-        @DisplayName("router with empty admin names")
-        void emptyAdminNames() {
+        @DisplayName("router with basic permissions setup")
+        void basicSetup() {
             assertNotNull(createRouter());
         }
 
         @Test
-        @DisplayName("router with admin names")
-        void withAdminNames() {
+        @DisplayName("router with standard values")
+        void standardValues() {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
                     groups, serverToMac,
-                    wakeService, logger, allowedListFn, Set.of("Admin1", "Admin2"), portalHandoffService
+                    wakeService, logger, allowedListFn, portalHandoffService
             ));
         }
     }
@@ -152,7 +151,7 @@ class StickyRouterTest {
                     proxyServer, plugin, "lobby", 300, 30,
                     Map.of("group1", List.of("server1", "server2")),
                     Map.of(),
-                    wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                    wakeService, logger, allowedListFn, portalHandoffService
             );
             assertNotNull(router);
         }
@@ -175,7 +174,7 @@ class StickyRouterTest {
             assertNotNull(new StickyRouter(
                     proxyServer, plugin, "lobby", 300, 30,
                     manyGroups, Map.of(),
-                    wakeService, logger, allowedListFn, Set.of(), portalHandoffService
+                    wakeService, logger, allowedListFn, portalHandoffService
             ));
         }
     }
@@ -197,7 +196,6 @@ class StickyRouterTest {
                 wakeService,
                 logger,
                 allowedListFn,
-                Set.of(),
                 portalHandoffService
         );
     }

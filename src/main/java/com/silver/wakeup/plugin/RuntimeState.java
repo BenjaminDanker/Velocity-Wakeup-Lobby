@@ -13,12 +13,9 @@ import java.io.IOException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -40,7 +37,6 @@ public class RuntimeState {
     private long pingEverySec = 2;
     private final Map<String, List<String>> groups = new HashMap<>();
     private final Map<String, String> serverToMac = new HashMap<>();
-    private Set<String> adminNames = Set.of();
     private WakeService wakeService;
     private StickyRouter stickyRouter;
 
@@ -70,9 +66,6 @@ public class RuntimeState {
         this.groups.clear();
         config.groups().forEach((key, value) -> this.groups.put(key, new ArrayList<>(value)));
 
-        this.adminNames = new HashSet<>(config.adminNames());
-        logger.info("[WakeUpLobby] Loaded {} admin(s): {}", adminNames.size(), adminNames);
-
         try {
             this.wakeService = new WakeService(config.broadcastIp());
         } catch (UnknownHostException ex) {
@@ -90,7 +83,6 @@ public class RuntimeState {
                 wakeService,
                 logger,
                 allowedTargetsDownward,
-                adminNames,
                 portalHandoffService
         );
 
@@ -111,10 +103,6 @@ public class RuntimeState {
 
     String holdingServer() {
         return holdingServer;
-    }
-
-    boolean isAdmin(String username) {
-        return adminNames.contains(username.toLowerCase(Locale.ROOT));
     }
 
     List<String> groupMembers(String group) {

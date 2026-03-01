@@ -13,13 +13,15 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Locale;
 import java.util.Optional;
 
 /**
  * Centralises registration and handling for all WakeUpLobby commands.
  */
 public class CommandRegistrar {
+    private static final String SERVER_PERMISSION = "wakeuplobby.server";
+    private static final String WAKEUPLOBBY_USAGE = "§7Usage: /wakeuplobby reload | /wakeuplobby ops <list|add|remove> [player]";
+
     private final ProxyServer proxy;
     private final RuntimeState runtime;
     private final PortalCommandHandler portalCommandHandler;
@@ -50,7 +52,7 @@ public class CommandRegistrar {
         registerServerOverride();
         registerReturnCommand();
         registered = true;
-        logger.info("[WakeUpLobby] Commands registered: /wakeuplobby reload, /wl portal, /server (override), /return");
+        logger.info("[WakeUpLobby] Commands registered: /wakeuplobby reload, /wakeuplobby ops, /wl portal, /server (override), /return");
     }
 
     private void registerReloadCommand() {
@@ -60,30 +62,100 @@ public class CommandRegistrar {
                 @Override
                 public void execute(Invocation invocation) {
                     CommandSource source = invocation.source();
+                    String[] args = invocation.arguments();
 
-                    if (source instanceof Player player) {
-                        String name = player.getUsername().toLowerCase(Locale.ROOT);
-                        if (!runtime.isAdmin(name)) {
+                    if (args.length == 0) {
+                        source.sendMessage(Component.text(WAKEUPLOBBY_USAGE));
+                        return;
+                    }
+
+                    if (args[0].equalsIgnoreCase("reload")) {
+                        if (!canManageWakeupLobby(source)) {
                             source.sendMessage(Component.text("§cYou do not have permission to use this command."));
                             return;
                         }
-                    }
-
-                    String[] args = invocation.arguments();
-                    if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
                         try {
                             plugin.reloadConfig();
-                            source.sendMessage(Component.text("§aWakeUpLobby config reloaded successfully."));
+                            source.sendMessage(Component.text("§aWakeUpLobby config and velocity ops reloaded successfully."));
                         } catch (IOException e) {
                             logger.error("Reload failed", e);
                             source.sendMessage(Component.text("§cFailed to reload config: " + e.getMessage()));
                         }
-                    } else {
-                        source.sendMessage(Component.text("§7Usage: /wakeuplobby reload"));
+                        return;
                     }
+
+                    if (args[0].equalsIgnoreCase("ops")) {
+                        handleOpsCommand(source, args);
+                        return;
+                    }
+
+                    source.sendMessage(Component.text(WAKEUPLOBBY_USAGE));
+                }
+
+                @Override
+                public boolean hasPermission(Invocation invocation) {
+                    return canManageWakeupLobby(invocation.source());
                 }
             }
         );
+    }
+
+    private void handleOpsCommand(CommandSource source, String[] args) {
+        if (!canManageWakeupLobby(source)) {
+            source.sendMessage(Component.text("§cYou do not have permission to use this command."));
+            return;
+        }
+
+        if (args.length < 2) {
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops <list|add|remove> [player]"));
+            return;
+        }
+
+        if (args[1].equalsIgnoreCase("list")) {
+            var ops = plugin.listVelocityOps();
+            if (ops.isEmpty()) {
+                source.sendMessage(Component.text("§eVelocity ops list is empty."));
+            } else {
+                source.sendMessage(Component.text("§aVelocity ops: §f" + String.join(", ", ops)));
+            }
+            return;
+        }
+
+        if (args.length < 3) {
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops " + args[1].toLowerCase() + " <player>"));
+            return;
+        }
+
+        String target = args[2];
+        try {
+            if (args[1].equalsIgnoreCase("add")) {
+                boolean changed = plugin.addVelocityOp(target);
+                source.sendMessage(Component.text(changed
+                        ? "§aAdded velocity op: §f" + target
+                        : "§ePlayer is already a velocity op: §f" + target));
+                return;
+            }
+
+            if (args[1].equalsIgnoreCase("remove")) {
+                boolean changed = plugin.removeVelocityOp(target);
+                source.sendMessage(Component.text(changed
+                        ? "§aRemoved velocity op: §f" + target
+                        : "§ePlayer is not in velocity ops: §f" + target));
+                return;
+            }
+
+            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops <list|add|remove> [player]"));
+        } catch (IOException e) {
+            logger.error("Failed to update velocity ops list", e);
+            source.sendMessage(Component.text("§cFailed updating velocity ops list: " + e.getMessage()));
+        }
+    }
+
+    private boolean canManageWakeupLobby(CommandSource source) {
+        if (!(source instanceof Player player)) {
+            return true;
+        }
+        return plugin.isVelocityOp(player.getUsername());
     }
 
     private void registerPortalCommand() {
@@ -131,11 +203,11 @@ public class CommandRegistrar {
 
     private void registerMessageCommands() {
     proxy.getCommandManager().register("w",
-        new SanitizedForwardCommand(proxy, runtime, logger, "minecraft:msg", "w", true));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:msg", "w", true));
     proxy.getCommandManager().register("msg",
-        new SanitizedForwardCommand(proxy, runtime, logger, "minecraft:msg", "msg", true));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:msg", "msg", true));
     proxy.getCommandManager().register("teammsg",
-        new SanitizedForwardCommand(proxy, runtime, logger, "minecraft:teammsg", "teammsg", false));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:teammsg", "teammsg", false));
     }
 
     private void registerServerOverride() {
@@ -274,6 +346,6 @@ public class CommandRegistrar {
     }
 
     private boolean hasBypass(Player player) {
-        return runtime.isAdmin(player.getUsername());
+        return player.hasPermission(SERVER_PERMISSION) || plugin.isVelocityOp(player.getUsername());
     }
 }

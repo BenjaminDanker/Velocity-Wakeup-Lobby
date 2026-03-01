@@ -5,7 +5,6 @@ import org.junit.jupiter.api.DisplayName;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,7 +21,6 @@ class LobbyConfigTest {
                 30,
                 Map.of("server1", "00:11:22:33:44:55"),
                 Map.of("group1", List.of("server1", "server2")),
-                Set.of("Admin"),
                 "global-secret",
                 Map.of("portal1", "secret1"),
                 Map.of("vanilla1", "backend-secret"),
@@ -47,7 +45,6 @@ class LobbyConfigTest {
                         30,
                         Map.of(),
                         Map.of(),
-                        Set.of(),
                         "secret",
                         Map.of(),
                         Map.of(),
@@ -68,7 +65,6 @@ class LobbyConfigTest {
                         30,
                         Map.of(),
                         Map.of(),
-                        Set.of(),
                         "secret",
                         Map.of(),
                         Map.of(),
@@ -89,7 +85,6 @@ class LobbyConfigTest {
                         30,
                         Map.of(),
                         Map.of(),
-                        Set.of(),
                         null,
                         Map.of(),
                         Map.of(),
@@ -110,7 +105,6 @@ class LobbyConfigTest {
                         30,
                         Map.of(),
                         Map.of(),
-                        Set.of(),
                         "secret",
                         null,
                         Map.of(),
@@ -133,7 +127,6 @@ class LobbyConfigTest {
                 30,
                 original,
                 Map.of(),
-                Set.of(),
                 "secret",
                 Map.of(),
                 Map.of(),
@@ -163,7 +156,6 @@ class LobbyConfigTest {
                 30,
                 Map.of(),
                 original,
-                Set.of(),
                 "secret",
                 Map.of(),
                 Map.of(),
@@ -181,36 +173,6 @@ class LobbyConfigTest {
     }
 
     @Test
-    @DisplayName("adminNames is defensively copied (immutable)")
-    void adminNamesImmutable() {
-        Set<String> original = new java.util.HashSet<>();
-        original.add("Admin1");
-        
-        LobbyConfig config = new LobbyConfig(
-                "192.168.1.255",
-                "lobby",
-                300,
-                30,
-                Map.of(),
-                Map.of(),
-                original,
-                "secret",
-                Map.of(),
-                Map.of(),
-                List.of("vanilla1"),
-                Map.of()
-        );
-
-        original.add("Admin2");
-        
-        Set<String> fromConfig = config.adminNames();
-        assertEquals(1, fromConfig.size());
-        assertThrows(UnsupportedOperationException.class, () ->
-                fromConfig.add("Admin3")
-        );
-    }
-
-    @Test
     @DisplayName("perPortalSecrets is defensively copied (immutable)")
     void perPortalSecretsImmutable() {
         Map<String, String> original = new java.util.HashMap<>();
@@ -223,7 +185,6 @@ class LobbyConfigTest {
                 30,
                 Map.of(),
                 Map.of(),
-                Set.of(),
                 "global-secret",
                 original,
                 Map.of(),
@@ -248,7 +209,6 @@ class LobbyConfigTest {
                 30,
                 Map.of("server1", "00:11:22:33:44:55"),
                 Map.of("group1", List.of("server1")),
-                Set.of("Admin"),
                 "secret",
                 Map.of(),
                 Map.of(),
@@ -265,7 +225,6 @@ class LobbyConfigTest {
     void allGetters() {
         Map<String, String> serverToMac = Map.of("server1", "00:11:22:33:44:55");
         Map<String, List<String>> groups = Map.of("group1", List.of("server1"));
-        Set<String> adminNames = Set.of("Admin");
         Map<String, String> perPortalSecrets = Map.of("portal1", "secret1");
 
         LobbyConfig config = new LobbyConfig(
@@ -275,7 +234,6 @@ class LobbyConfigTest {
                 30,
                 serverToMac,
                 groups,
-                adminNames,
                 "global-secret",
                 perPortalSecrets,
                 Map.of(),
@@ -289,7 +247,6 @@ class LobbyConfigTest {
         assertEquals(30, config.pingEverySec());
         assertEquals(serverToMac, config.serverToMac());
         assertEquals(groups, config.groups());
-        assertEquals(adminNames, config.adminNames());
         assertEquals("global-secret", config.globalPortalSecret());
         assertEquals(perPortalSecrets, config.perPortalSecrets());
     }

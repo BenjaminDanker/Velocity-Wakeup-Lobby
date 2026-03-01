@@ -40,6 +40,7 @@ The compiled plugin JAR will be in `build/libs/wake-up-lobby.jar`.
 3. Edit the configuration file to match your setup (see Configuration below)
 4. Run `/wakeuplobby reload` to apply changes without restarting
 5. Configure per-portal secrets if using portal authentication
+6. Add proxy-level operators to `plugins/wakeuplobby/velocity-ops.json` (or use `/wakeuplobby ops`)
 
 ### Ecosystem Setup
 
@@ -93,11 +94,6 @@ groups:
   creative:
     - creative_server
 
-# Admin player names (for command access)
-admin_names:
-  - "AdminName"
-  - "ModeratorName"
-
 # Portal authentication
 global_portal_secret: "shared-secret-key"
 per_portal_secrets:
@@ -109,9 +105,33 @@ per_portal_secrets:
 ### Commands
 
 **Admin Commands:**
-- `/wakeuplobby reload` - Reload plugin configuration
+- `/wakeuplobby reload` - Reload plugin configuration and velocity ops list (velocity ops only)
+- `/wakeuplobby ops list` - List velocity ops
+- `/wakeuplobby ops add <player>` - Add a velocity op (saved immediately to JSON)
+- `/wakeuplobby ops remove <player>` - Remove a velocity op (saved immediately to JSON)
 - `/wl portal <target> <token> [sourcePortal]` - Handle portal handoff with authentication
-- `/server [name]` - Connect to a server
+- `/server [name]` - Connect to a server (velocity ops or `wakeuplobby.server`)
+
+**Permissions:**
+- `wakeuplobby.server` - Allow `/server` and `/connect` manual switching
+- `wakeuplobby.selectors` - Allow selectors (`@...`) in forwarded `/w`, `/msg`, `/teammsg`
+
+### Velocity Ops File
+
+Velocity-level operator usernames are stored in:
+
+- `plugins/wakeuplobby/velocity-ops.json`
+
+Example:
+
+```json
+[
+  "adminname",
+  "moderatorname"
+]
+```
+
+Usernames are matched case-insensitively. Editing this file manually takes effect after `/wakeuplobby reload`.
 
 **Allowed for Non-Ops:**
 - `/w <player> <message>` - Send a direct message

@@ -10,12 +10,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Handles reading and writing WakeUpLobby configuration from disk.
@@ -115,7 +112,6 @@ return_specials:
 
         Map<String, String> serverToMac = parseServerMacs(root.get("servers"));
         Map<String, List<String>> groups = parseGroups(root.get("groups"));
-        Set<String> adminNames = parseAdmins(root.get("admins"));
 
         Map<String, String> perPortalSecrets = parsePerPortalSecrets(root.get("portal_secrets"));
         String globalSecret = stringOrDefault(root.get("portal_secret"), "").trim();
@@ -132,7 +128,6 @@ return_specials:
                 pingEverySec,
                 serverToMac,
                 groups,
-                adminNames,
                 globalSecret,
                 perPortalSecrets,
             backendPortalRequestSecrets,
@@ -228,18 +223,6 @@ return_specials:
                     }
                 }
                 result.put(entry.getKey(), servers);
-            }
-        }
-        return result;
-    }
-
-    private static Set<String> parseAdmins(Object value) {
-        Set<String> result = new HashSet<>();
-        if (value instanceof Iterable<?> iterable) {
-            for (Object element : iterable) {
-                if (element != null) {
-                    result.add(element.toString().toLowerCase(Locale.ROOT));
-                }
             }
         }
         return result;

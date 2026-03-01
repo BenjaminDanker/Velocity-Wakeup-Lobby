@@ -65,6 +65,8 @@ import java.util.stream.Collectors;
  */
 @Plugin(id = "wakeuplobby", name = "WakeUpLobby", version = "1.3.0")
 public class VelocityPlugin {
+    private static final String SERVER_PERMISSION = "wakeuplobby.server";
+
     static final String MPDS_REMOVE_SELF_COMMAND = "mpdsremovecustomidself";
     private final ProxyServer proxy;
     private final Logger logger;
@@ -78,6 +80,7 @@ public class VelocityPlugin {
     private PortalCommandHandler portalCommandHandler;
     private PortalTokenVerifier portalTokenVerifier;
     private PortalRequestVerifier portalRequestVerifier;
+    private VelocityOpsStore velocityOpsStore;
     private CommandRegistrar commandRegistrar;
     private static final MinecraftChannelIdentifier PORTAL_HANDOFF_CHANNEL =
         MinecraftChannelIdentifier.from("serverportals:portal_handoff");
@@ -234,6 +237,8 @@ public class VelocityPlugin {
             portalTokenVerifier = new PortalTokenVerifier(logger);
             portalHandoffService = new PortalHandoffService(logger);
             portalRequestVerifier = new PortalRequestVerifier(logger);
+            velocityOpsStore = new VelocityOpsStore(dataDir, logger);
+            velocityOpsStore.ensureFileAndLoad();
             runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
             stateStore = new PlayerStateStore(dataDir, logger);
 
@@ -643,7 +648,7 @@ public class VelocityPlugin {
             return;
         }
 
-        if (runtime == null || runtime.isAdmin(player.getUsername())) {
+        if (runtime == null || hasBypass(player)) {
             return;
         }
 
@@ -670,7 +675,8 @@ public class VelocityPlugin {
         boolean allowedBasic = parts[0].equals("w")
                 || parts[0].equals("msg")
             || parts[0].equals("teammsg")
-            || parts[0].equals("return");
+            || parts[0].equals("return")
+            || ((parts[0].equals("server") || parts[0].equals("connect")) && player.hasPermission(SERVER_PERMISSION));
         if (allowedBasic) {
             return;
         }
@@ -725,7 +731,32 @@ public class VelocityPlugin {
     }
 
     private boolean hasBypass(Player p) {
-        return runtime.isAdmin(p.getUsername());
+        return p.hasPermission(SERVER_PERMISSION) || isVelocityOp(p.getUsername());
+    }
+
+    boolean isVelocityOp(String username) {
+        return velocityOpsStore != null && velocityOpsStore.isVelocityOp(username);
+    }
+
+    boolean addVelocityOp(String username) throws IOException {
+        if (velocityOpsStore == null) {
+            return false;
+        }
+        return velocityOpsStore.add(username);
+    }
+
+    boolean removeVelocityOp(String username) throws IOException {
+        if (velocityOpsStore == null) {
+            return false;
+        }
+        return velocityOpsStore.remove(username);
+    }
+
+    List<String> listVelocityOps() {
+        if (velocityOpsStore == null) {
+            return List.of();
+        }
+        return velocityOpsStore.list();
     }
 
     private Optional<String> preferredFor(UUID uuid) {
@@ -778,6 +809,9 @@ public class VelocityPlugin {
     }
 
     void reloadConfig() throws IOException {
+        if (velocityOpsStore != null) {
+            velocityOpsStore.reload();
+        }
         loadConfig();
     }
 
