@@ -53,9 +53,10 @@ public class CommandRegistrar {
         registerPortalCommand();
         registerMessageCommands();
         registerServerOverride();
+        registerForceServerCommand();
         registerReturnCommand();
         registered = true;
-        logger.info("[WakeUpLobby] Commands registered: /wakeuplobby reload, /wakeuplobby ops, /wl portal, /server (override), /return");
+        logger.info("[WakeUpLobby] Commands registered: /wakeuplobby reload, /wakeuplobby ops, /wl portal, /server (override), /forceserver, /return");
     }
 
     private void registerReloadCommand() {
@@ -344,6 +345,76 @@ public class CommandRegistrar {
                             return true;
                         }
                         return hasBypass(player);
+                    }
+                }
+        );
+    }
+
+    private void registerForceServerCommand() {
+        proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("forceserver").build(),
+                new SimpleCommand() {
+                    @Override
+                    public void execute(Invocation invocation) {
+                        CommandSource source = invocation.source();
+                        if (!canManageWakeupLobby(source)) {
+                            source.sendMessage(Component.text("§cYou do not have permission to use this command."));
+                            return;
+                        }
+
+                        String[] args = invocation.arguments();
+                        if (args.length < 2) {
+                            source.sendMessage(Component.text("§7Usage: /forceserver <player> <server>"));
+                            return;
+                        }
+
+                        String targetPlayerName = args[0];
+                        String targetServerName = args[1];
+
+                        Optional<Player> targetPlayerOpt = proxy.getPlayer(targetPlayerName);
+                        if (targetPlayerOpt.isEmpty()) {
+                            source.sendMessage(Component.text("§cPlayer '" + targetPlayerName + "' is not online."));
+                            return;
+                        }
+
+                        var serverOpt = proxy.getServer(targetServerName);
+                        if (serverOpt.isEmpty()) {
+                            source.sendMessage(Component.text("§cUnknown server: " + targetServerName));
+                            return;
+                        }
+
+                        Player targetPlayer = targetPlayerOpt.get();
+
+                        // Cancel any sticky wait exactly like the /server override
+                        runtime.stickyRouter().cancelStickyWait(targetPlayer.getUniqueId());
+                        runtime.stickyRouter().markInternalOnce(targetPlayer.getUniqueId());
+
+                        targetPlayer.createConnectionRequest(serverOpt.get()).fireAndForget();
+                        source.sendMessage(Component.text("§aMoving " + targetPlayerName + " to " + targetServerName + "..."));
+                    }
+
+                    @Override
+                    public boolean hasPermission(Invocation invocation) {
+                        return canManageWakeupLobby(invocation.source());
+                    }
+
+                    @Override
+                    public java.util.List<String> suggest(Invocation invocation) {
+                        String[] args = invocation.arguments();
+                        if (args.length == 0 || args.length == 1) {
+                            String prefix = args.length == 0 ? "" : args[0].toLowerCase();
+                            return proxy.getAllPlayers().stream()
+                                    .map(Player::getUsername)
+                                    .filter(name -> name.toLowerCase().startsWith(prefix))
+                                    .collect(java.util.stream.Collectors.toList());
+                        } else if (args.length == 2) {
+                            String prefix = args[1].toLowerCase();
+                            return proxy.getAllServers().stream()
+                                    .map(server -> server.getServerInfo().getName())
+                                    .filter(name -> name.toLowerCase().startsWith(prefix))
+                                    .collect(java.util.stream.Collectors.toList());
+                        }
+                        return java.util.List.of();
                     }
                 }
         );
