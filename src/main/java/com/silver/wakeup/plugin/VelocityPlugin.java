@@ -345,27 +345,16 @@ public class VelocityPlugin {
             }
 
             String sourcePortal = request.sourcePortal();
-            if (sourcePortal != null && !sourcePortal.isBlank()) {
-                portalHandoffService.rememberSourcePortal(player.getUniqueId(), sourcePortal);
+            boolean handled = portalCommandHandler != null
+                && portalCommandHandler.handleAuthorized(
+                    player,
+                    target,
+                    Optional.ofNullable(sourcePortal).filter(s -> !s.isBlank())
+                );
+            if (!handled) {
+                logger.warn("[WakeUpLobby] Portal request was verified but handoff setup failed for player {} target {}",
+                    player.getUsername(), target);
             }
-
-            // Same behavior as /wl portal: unlock destination + sticky-wait through holding.
-            visited.computeIfAbsent(player.getUniqueId(), k -> new HashSet<>()).add(target);
-            lastServer.put(player.getUniqueId(), target);
-            saveVisited();
-            saveStore();
-
-            String origin = currentServerName(player).orElse(null);
-            runtime.stickyRouter().beginStickyWait(player.getUniqueId(), target, origin);
-            runtime.stickyRouter().markInternalOnce(player.getUniqueId());
-
-            var holdingReg = proxy.getServer(runtime.holdingServer());
-            if (holdingReg.isEmpty()) {
-                logger.error("[WakeUpLobby] Holding server '{}' not found; cannot process portal request", runtime.holdingServer());
-                return;
-            }
-
-            player.createConnectionRequest(holdingReg.get()).fireAndForget();
         } catch (Exception ex) {
             logger.warn("[WakeUpLobby] Failed handling portal_request: {}", ex.toString());
         } finally {

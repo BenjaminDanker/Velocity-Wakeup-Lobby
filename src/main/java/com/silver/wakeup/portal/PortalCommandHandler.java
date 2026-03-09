@@ -54,6 +54,14 @@ public class PortalCommandHandler {
 
         log.info("[WakeUpLobby] Portal token verified successfully");
 
+        return handleAuthorized(player, targetServer, sourcePortalOpt);
+    }
+
+    public boolean handleAuthorized(Player player, String targetServer, Optional<String> sourcePortalOpt) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(targetServer, "targetServer");
+        Objects.requireNonNull(sourcePortalOpt, "sourcePortalOpt");
+
         UUID playerId = player.getUniqueId();
         sourcePortalOpt.ifPresentOrElse(
                 portal -> {
