@@ -439,12 +439,31 @@ public class CommandRegistrar {
                             return;
                         }
 
-                        if (!runtime.stickyRouter().isReturnEligible(player.getUniqueId())) {
+                        UUID playerId = player.getUniqueId();
+
+                        // Fresh admission waiting on an offline preferred backend uses the same
+                        // /return command, but it stays admission-controlled: choose the return
+                        // destination and enter the normal priority queue.
+                        if (plugin.isOfflineWaiting(playerId)) {
+                            if (!plugin.isOfflineReturnEligible(playerId)) {
+                                long seconds = plugin.offlineReturnSecondsRemaining(playerId);
+                                player.sendMessage(Component.text(
+                                        "⚠ /return is available in " + seconds + "s if the server is still offline."));
+                                return;
+                            }
+
+                            plugin.queueOfflineReturn(player);
+                            return;
+                        }
+
+                        // Existing backend -> lobby -> backend sticky waits keep the original
+                        // return behavior exactly as before.
+                        if (!runtime.stickyRouter().isReturnEligible(playerId)) {
                             player.sendMessage(Component.text("⚠ /return is only available after the grace period expires."));
                             return;
                         }
 
-                        String dest = plugin.computeReturnDestination(player.getUniqueId());
+                        String dest = plugin.computeReturnDestination(playerId);
                         if (dest == null || dest.isBlank()) {
                             player.sendMessage(Component.text("⚠ No return destination is configured."));
                             return;

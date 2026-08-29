@@ -1,6 +1,10 @@
 package com.silver.wakeup.plugin;
 
 import com.google.inject.Inject;
+import com.silver.wakeup.admission.AdmissionClient;
+import com.silver.wakeup.admission.AdmissionQueue;
+import com.silver.wakeup.admission.BackendHealthMonitor;
+import com.silver.wakeup.admission.OfflineWaitManager;
 import com.silver.wakeup.config.LobbyConfig;
 import com.silver.wakeup.config.LobbyConfigLoader;
 import com.silver.wakeup.portal.PortalCommandHandler;
@@ -13,6 +17,7 @@ import com.silver.wakeup.state.PlayerStateStore;
 import com.silver.wakeup.config.ReturnSpecial;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.command.CommandExecuteEvent;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
@@ -45,6 +50,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -66,6 +72,9 @@ import java.util.stream.Collectors;
 @Plugin(id = "wakeuplobby", name = "WakeUpLobby", version = "1.3.0")
 public class VelocityPlugin {
     private static final String SERVER_PERMISSION = "wakeuplobby.server";
+    private static final String BIG_VIP_PERMISSION = "wakeuplobby.queue.bigvip";
+    private static final String VIP_PERMISSION = "wakeuplobby.queue.vip";
+    private static final String ADMISSION_STATUS_URL = "http://primary-ram.local:25580/status";
 
     static final String MPDS_REMOVE_SELF_COMMAND = "mpdsremovecustomidself";
     private final ProxyServer proxy;
@@ -84,6 +93,14 @@ public class VelocityPlugin {
     private WhitelistStore whitelistStore;
     private CommandRegistrar commandRegistrar;
     private SecurityManager securityManager;
+
+    // fresh-player admission
+    private AdmissionClient admissionClient;
+    private BackendHealthMonitor backendHealthMonitor;
+    private final AdmissionQueue admissionQueue = new AdmissionQueue();
+    private final OfflineWaitManager offlineWaitManager = new OfflineWaitManager();
+    private final Set<UUID> freshAdmissions = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean admissionDispatchInFlight = new AtomicBoolean(false);
     private static final MinecraftChannelIdentifier PORTAL_HANDOFF_CHANNEL =
         MinecraftChannelIdentifier.from("serverportals:portal_handoff");
 
@@ -256,6 +273,31 @@ public class VelocityPlugin {
 
             portalCommandHandler = new PortalCommandHandler(logger, new VelocityPortalCommandDependencies());
             commandRegistrar = new CommandRegistrar(proxy, runtime, portalCommandHandler, this, logger);
+
+            admissionClient = new AdmissionClient(ADMISSION_STATUS_URL);
+            backendHealthMonitor = new BackendHealthMonitor(proxy, logger);
+
+            // Prime both caches immediately, then keep them fresh.
+            admissionClient.refresh();
+            backendHealthMonitor.refresh(runtime.holdingServer());
+
+            proxy.getScheduler().buildTask(this, admissionClient::refresh)
+                    .repeat(Duration.ofSeconds(1))
+                    .schedule();
+
+            proxy.getScheduler().buildTask(this, () -> backendHealthMonitor.refresh(runtime.holdingServer()))
+                    .repeat(Duration.ofSeconds(2))
+                    .schedule();
+
+            proxy.getScheduler().buildTask(this, this::promoteOfflineWaiters)
+                    .delay(Duration.ofSeconds(1))
+                    .repeat(Duration.ofSeconds(1))
+                    .schedule();
+
+            proxy.getScheduler().buildTask(this, this::processAdmissionQueue)
+                    .delay(Duration.ofMillis(2500))
+                    .repeat(Duration.ofMillis(2500))
+                    .schedule();
 
             logger.info("[WakeUpLobby] Loaded. Holding={}, grace={}s, interval={}s",
                     runtime.holdingServer(),
@@ -487,47 +529,26 @@ public class VelocityPlugin {
         event.setResult(ServerLoginPluginMessageEvent.ResponseResult.reply(payload));
     }
 
-    /** Initial routing with quick ping: bypass lobby if preferred is up; else send to holding. */
+    /**
+     * Every fresh external connection starts in the Raspberry Pi holding lobby.
+     * The admission system decides when that player may enter primary-ram.
+     */
     @Subscribe
     public void onChoose(PlayerChooseInitialServerEvent e) {
         var p = e.getPlayer();
-        String preferred = preferredFor(p.getUniqueId()).orElseGet(this::firstDefault);
-        logger.info("[WakeUpLobby] onChoose: player={} preferred={}", p.getUsername(), preferred);
-        
-        if (preferred == null) {
-            logger.warn("[WakeUpLobby] onChoose: player {} has no preferred server, returning", p.getUsername());
-            return;
-        }
+        UUID playerId = p.getUniqueId();
+        freshAdmissions.add(playerId);
 
-        var prefReg = proxy.getServer(preferred);
+        String preferred = preferredFor(playerId).orElseGet(this::firstDefault);
+        logger.info("[WakeUpLobby] onChoose: fresh player={} preferred={}", p.getUsername(), preferred);
+
         var holdReg = proxy.getServer(runtime.holdingServer());
-
-        logger.info("[WakeUpLobby] onChoose: {} preferred='{}' holding='{}'", p.getUsername(), preferred, runtime.holdingServer());
-
-        if (prefReg.isEmpty()) {
-            logger.warn("[WakeUpLobby] onChoose: {} preferred '{}' not registered → holding '{}'",
-                    p.getUsername(), preferred, runtime.holdingServer());
-            holdReg.ifPresent(e::setInitialServer);
+        if (holdReg.isEmpty()) {
+            logger.error("[WakeUpLobby] Holding server '{}' is not registered", runtime.holdingServer());
             return;
         }
 
-        // Non-blocking: set holding as default, then try to upgrade async
-        holdReg.ifPresent(srv -> {
-            logger.info("[WakeUpLobby] onChoose: setting initial server to holding '{}' for {}", 
-                       runtime.holdingServer(), p.getUsername());
-            e.setInitialServer(srv);
-        });
-        
-        prefReg.get().ping()
-            .orTimeout(1200, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .whenComplete((pong, err) -> {
-                if (err == null) {
-                    logger.info("[WakeUpLobby] onChoose: {} bypass → preferred '{}' is up", p.getUsername(), preferred);
-                    // Player already in holding; they'll switch if this completes
-                } else {
-                    logger.info("[WakeUpLobby] onChoose: {} preferred '{}' not ready → staying in holding", p.getUsername(), preferred);
-                }
-            });
+        e.setInitialServer(holdReg.get());
     }
 
     /**
@@ -617,18 +638,27 @@ public class VelocityPlugin {
         }
 
         if (requested.equalsIgnoreCase(runtime.holdingServer())) {
+            UUID playerId = player.getUniqueId();
             String origin = currentServerName(player).orElse(null);
             logger.info("[WakeUpLobby] onPreConnect: {} heading to holding '{}', preferred='{}' (origin='{}')",
                     player.getUsername(), runtime.holdingServer(), preferred, origin);
-            
-            // Check if sticky wait already started (e.g., from /wl portal command)
-            if (!runtime.stickyRouter().hasStickyState(player.getUniqueId())) {
+
+            // A fresh external join is handled by AdmissionQueue/OfflineWaitManager after
+            // ServerConnectedEvent confirms the player actually reached the lobby.
+            if (freshAdmissions.contains(playerId)) {
+                logger.info("[WakeUpLobby] onPreConnect: {} is a fresh admission; not creating sticky state",
+                        player.getUsername());
+                return;
+            }
+
+            // Existing backend -> lobby -> backend transfers keep the old sticky path.
+            if (!runtime.stickyRouter().hasStickyState(playerId)) {
                 logger.info("[WakeUpLobby] onPreConnect: no existing sticky state, starting sticky toward '{}'", preferred);
                 player.sendMessage(Component.text("⏳ Starting " + preferred + "…"));
-                runtime.stickyRouter().beginStickyWait(player.getUniqueId(), preferred, origin);
+                runtime.stickyRouter().beginStickyWait(playerId, preferred, origin);
             } else {
-                logger.info("[WakeUpLobby] onPreConnect: sticky state already exists for player {}, not recreating", 
-                           player.getUsername());
+                logger.info("[WakeUpLobby] onPreConnect: sticky state already exists for player {}, not recreating",
+                        player.getUsername());
             }
             return;
         }
@@ -685,32 +715,283 @@ public class VelocityPlugin {
     @Subscribe
     public void onConnected(ServerConnectedEvent e) {
         var p = e.getPlayer();
+        UUID playerId = p.getUniqueId();
         var srv = e.getServer().getServerInfo().getName();
-        
+
         logger.info("[WakeUpLobby] onConnected: player={} server={}", p.getUsername(), srv);
 
         if (!srv.equalsIgnoreCase(runtime.holdingServer())) {
-            runtime.stickyRouter().clearReturnEligibility(p.getUniqueId());
+            // Successful entry into a backend means this player is no longer admission-waiting.
+            freshAdmissions.remove(playerId);
+            admissionQueue.remove(playerId);
+            offlineWaitManager.remove(playerId);
 
-            visited.computeIfAbsent(p.getUniqueId(), k -> new HashSet<>()).add(srv);
+            runtime.stickyRouter().clearReturnEligibility(playerId);
+
+            visited.computeIfAbsent(playerId, k -> new HashSet<>()).add(srv);
             logger.info("[WakeUpLobby] onConnected: added '{}' to visited set for {}", srv, p.getUsername());
             proxy.getScheduler().buildTask(this, this::saveVisited).delay(Duration.ofSeconds(1)).schedule();
 
-            lastServer.put(p.getUniqueId(), srv);
+            lastServer.put(playerId, srv);
             proxy.getScheduler().buildTask(this, this::saveStore).delay(Duration.ofSeconds(1)).schedule();
 
             logger.info("[WakeUpLobby] onConnected: {} now last='{}'", p.getUsername(), srv);
 
             LobbyConfig cfg = runtime.currentConfig();
             if (cfg != null && cfg.returnServerOrder().stream().anyMatch(s -> s.equalsIgnoreCase(srv))) {
-                lastListedServer.put(p.getUniqueId(), srv);
+                lastListedServer.put(playerId, srv);
                 proxy.getScheduler().buildTask(this, this::saveLastListed).delay(Duration.ofSeconds(1)).schedule();
                 logger.info("[WakeUpLobby] onConnected: {} lastListed='{}'", p.getUsername(), srv);
             }
-        } else {
-            logger.info("[WakeUpLobby] onConnected: {} connected to holding '{}', not recording as last/visited",
-                    p.getUsername(), srv);
+            return;
         }
+
+        logger.info("[WakeUpLobby] onConnected: {} connected to holding '{}', not recording as last/visited",
+                p.getUsername(), srv);
+
+        // Backend -> lobby -> backend transit already has StickyState and never enters
+        // fresh-player admission.
+        if (runtime.stickyRouter().hasStickyState(playerId)) {
+            logger.info("[Admission] {} is internal transit; admission queue bypassed", p.getUsername());
+            return;
+        }
+
+        // A player may remain in the lobby for a while. Do not enqueue them twice if
+        // another ServerConnectedEvent is observed.
+        if (admissionQueue.contains(playerId) || offlineWaitManager.contains(playerId)) {
+            return;
+        }
+
+        if (!freshAdmissions.remove(playerId)) {
+            logger.debug("[Admission] {} reached holding without fresh-admission state; leaving routing unchanged",
+                    p.getUsername());
+            return;
+        }
+
+        placeFreshPlayer(p);
+    }
+
+    @Subscribe
+    public void onDisconnect(DisconnectEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        freshAdmissions.remove(playerId);
+        admissionQueue.remove(playerId);
+        offlineWaitManager.remove(playerId);
+    }
+
+    private void placeFreshPlayer(Player player) {
+        UUID playerId = player.getUniqueId();
+        String target = preferredFor(playerId).orElse(null);
+        if (target == null || target.isBlank()) {
+            player.sendMessage(Component.text("⚠ No destination server is configured."));
+            return;
+        }
+
+        if (backendHealthMonitor != null && backendHealthMonitor.isOnline(target)) {
+            enqueueAdmission(player, "§eYou are queued to enter the server network.");
+            return;
+        }
+
+        offlineWaitManager.add(playerId);
+        player.sendMessage(Component.text("§e" + target + " is currently offline. You will enter the queue when it returns."));
+        player.sendMessage(Component.text("§7After the normal grace period, you can use /return to queue for your return destination instead."));
+        logger.info("[Admission] {} waiting outside queue because target '{}' is offline",
+                player.getUsername(), target);
+    }
+
+    private void enqueueAdmission(Player player, String message) {
+        UUID playerId = player.getUniqueId();
+        AdmissionQueue.Tier tier = queueTier(player);
+        if (!admissionQueue.enqueue(playerId, tier)) {
+            return;
+        }
+
+        int position = admissionQueue.position(playerId);
+        player.sendMessage(Component.text(message + " §7Position: §f#" + position));
+        logger.info("[Admission] queued {} tier={} position={}", player.getUsername(), tier, position);
+    }
+
+    private AdmissionQueue.Tier queueTier(Player player) {
+        if (hasBypass(player)) {
+            return AdmissionQueue.Tier.ADMIN;
+        }
+        if (player.hasPermission(BIG_VIP_PERMISSION)) {
+            return AdmissionQueue.Tier.BIG_VIP;
+        }
+        if (player.hasPermission(VIP_PERMISSION)) {
+            return AdmissionQueue.Tier.VIP;
+        }
+        return AdmissionQueue.Tier.NORMAL;
+    }
+
+    private void promoteOfflineWaiters() {
+        if (runtime == null || backendHealthMonitor == null) {
+            return;
+        }
+
+        for (OfflineWaitManager.Entry entry : offlineWaitManager.snapshot()) {
+            UUID playerId = entry.playerId();
+            Optional<Player> playerOpt = proxy.getPlayer(playerId);
+            if (playerOpt.isEmpty()) {
+                offlineWaitManager.remove(playerId);
+                continue;
+            }
+
+            Player player = playerOpt.get();
+            String current = currentServerName(player).orElse(null);
+            if (current == null || !current.equalsIgnoreCase(runtime.holdingServer())) {
+                offlineWaitManager.remove(playerId);
+                continue;
+            }
+
+            // If this somehow became an internal transit, sticky routing owns it.
+            if (runtime.stickyRouter().hasStickyState(playerId)) {
+                offlineWaitManager.remove(playerId);
+                continue;
+            }
+
+            String target = preferredFor(playerId).orElse(null);
+            if (target == null || !backendHealthMonitor.isOnline(target)) {
+                continue;
+            }
+
+            offlineWaitManager.remove(playerId);
+            enqueueAdmission(player, "§a" + target + " is back online. You have been added to the queue.");
+        }
+    }
+
+    private void processAdmissionQueue() {
+        if (runtime == null || admissionClient == null || backendHealthMonitor == null) {
+            return;
+        }
+        if (!admissionClient.isOpen() || !admissionDispatchInFlight.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            while (true) {
+                AdmissionQueue.Entry entry = admissionQueue.poll();
+                if (entry == null) {
+                    admissionDispatchInFlight.set(false);
+                    return;
+                }
+
+                Optional<Player> playerOpt = proxy.getPlayer(entry.playerId());
+                if (playerOpt.isEmpty()) {
+                    continue;
+                }
+
+                Player player = playerOpt.get();
+                String current = currentServerName(player).orElse(null);
+                if (current == null || !current.equalsIgnoreCase(runtime.holdingServer())) {
+                    continue;
+                }
+
+                if (runtime.stickyRouter().hasStickyState(entry.playerId())) {
+                    continue;
+                }
+
+                String target = preferredFor(entry.playerId()).orElse(null);
+                if (target == null || target.isBlank()) {
+                    player.sendMessage(Component.text("⚠ No destination server is configured."));
+                    continue;
+                }
+
+                if (!backendHealthMonitor.isOnline(target)) {
+                    offlineWaitManager.add(entry.playerId());
+                    player.sendMessage(Component.text("§e" + target + " went offline. You will re-enter the queue when it returns."));
+                    continue;
+                }
+
+                var serverOpt = proxy.getServer(target);
+                if (serverOpt.isEmpty()) {
+                    backendHealthMonitor.markOffline(target);
+                    offlineWaitManager.add(entry.playerId());
+                    player.sendMessage(Component.text("§e" + target + " is unavailable. You will re-enter the queue when it returns."));
+                    continue;
+                }
+
+                logger.info("[Admission] releasing {} -> {} tier={}",
+                        player.getUsername(), target, entry.tier());
+
+                runtime.stickyRouter().markInternalOnce(entry.playerId());
+                player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, error) -> {
+                    admissionDispatchInFlight.set(false);
+
+                    if (error == null && result != null && result.isSuccessful()) {
+                        return;
+                    }
+
+                    // Clear an internal marker if ServerPreConnectEvent never consumed it.
+                    runtime.stickyRouter().consumeInternalOnce(entry.playerId());
+                    backendHealthMonitor.markOffline(target);
+
+                    Optional<Player> stillOnline = proxy.getPlayer(entry.playerId());
+                    if (stillOnline.isPresent()) {
+                        Player waitingPlayer = stillOnline.get();
+                        String waitingCurrent = currentServerName(waitingPlayer).orElse(null);
+                        if (waitingCurrent != null && waitingCurrent.equalsIgnoreCase(runtime.holdingServer())) {
+                            offlineWaitManager.add(entry.playerId());
+                            waitingPlayer.sendMessage(Component.text("§e" + target + " stopped responding. You will re-enter the queue when it returns."));
+                        }
+                    }
+                });
+                return;
+            }
+        } catch (Throwable t) {
+            admissionDispatchInFlight.set(false);
+            logger.warn("[Admission] queue processing failed: {}", t.toString());
+        }
+    }
+
+    boolean isOfflineWaiting(UUID playerId) {
+        return offlineWaitManager.contains(playerId);
+    }
+
+    boolean isOfflineReturnEligible(UUID playerId) {
+        long waitingSince = offlineWaitManager.waitingSinceMs(playerId);
+        if (waitingSince < 0 || runtime == null || runtime.currentConfig() == null) {
+            return false;
+        }
+        long graceMs = runtime.currentConfig().graceSec() * 1000L;
+        return System.currentTimeMillis() - waitingSince >= graceMs;
+    }
+
+    long offlineReturnSecondsRemaining(UUID playerId) {
+        long waitingSince = offlineWaitManager.waitingSinceMs(playerId);
+        if (waitingSince < 0 || runtime == null || runtime.currentConfig() == null) {
+            return 0L;
+        }
+        long graceMs = runtime.currentConfig().graceSec() * 1000L;
+        long remainingMs = graceMs - (System.currentTimeMillis() - waitingSince);
+        return Math.max(0L, (remainingMs + 999L) / 1000L);
+    }
+
+    boolean queueOfflineReturn(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!offlineWaitManager.contains(playerId)) {
+            return false;
+        }
+
+        String dest = computeReturnDestination(playerId);
+        if (dest == null || dest.isBlank()) {
+            player.sendMessage(Component.text("⚠ No return destination is configured."));
+            return false;
+        }
+
+        if (backendHealthMonitor == null || !backendHealthMonitor.isOnline(dest)) {
+            player.sendMessage(Component.text("⚠ Return destination " + dest + " is currently offline."));
+            return false;
+        }
+
+        // This is the player's chosen routing state, not queue-owned destination state.
+        // Persist it so preferredFor(UUID) continues to be the single source of truth.
+        lastServer.put(playerId, dest);
+        saveStore();
+
+        offlineWaitManager.remove(playerId);
+        enqueueAdmission(player, "§eReturn selected: §a" + dest + "§e. You have been added to the queue.");
+        return true;
     }
 
     /* =================== Helpers & config =================== */
