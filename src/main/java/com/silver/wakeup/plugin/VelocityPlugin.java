@@ -20,6 +20,7 @@ import com.velocitypowered.api.event.command.CommandExecuteEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
+import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
@@ -549,6 +550,58 @@ public class VelocityPlugin {
         }
 
         e.setInitialServer(holdReg.get());
+    }
+
+    /**
+     * A backend going away does not create a new proxy connection, so it never
+     * reaches {@link #onChoose(PlayerChooseInitialServerEvent)}. Redirect the
+     * player through the holding server and mark this as an admission flow so
+     * {@link #onConnected(ServerConnectedEvent)} puts them into the queue (or
+     * the offline waiting list) just like a newly connected player.
+     */
+    @Subscribe
+    public void onKickedFromBackend(KickedFromServerEvent event) {
+        if (runtime == null) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        String source = event.getServer().getServerInfo().getName();
+        String holdingServer = runtime.holdingServer();
+
+        // Do not turn a failed holding-lobby connection into a redirect loop.
+        if (source.equalsIgnoreCase(holdingServer)) {
+            return;
+        }
+
+        var holding = proxy.getServer(holdingServer);
+        if (holding.isEmpty()) {
+            logger.error("[Admission] Cannot recover {} from backend '{}' because holding server '{}' is not registered",
+                    player.getUsername(), source, holdingServer);
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        // Cancel any previous transition so it cannot compete with admission.
+        runtime.stickyRouter().cancelStickyWait(playerId);
+        runtime.stickyRouter().clearReturnEligibility(playerId);
+        admissionQueue.remove(playerId);
+        offlineWaitManager.remove(playerId);
+        freshAdmissions.add(playerId);
+
+        // A kick from an already connected backend is a strong signal that it
+        // cannot accept this player right now. The next health refresh can
+        // promote the player immediately if that was only a transient kick.
+        if (backendHealthMonitor != null) {
+            backendHealthMonitor.markOffline(source);
+        }
+
+        logger.info("[Admission] backend '{}' disconnected {}; redirecting to holding '{}' for admission",
+                source, player.getUsername(), holdingServer);
+        event.setResult(KickedFromServerEvent.RedirectPlayer.create(
+                holding.get(),
+                Component.text("⚠ " + source + " is unavailable. Sending you to the waiting lobby…")
+        ));
     }
 
     /**
