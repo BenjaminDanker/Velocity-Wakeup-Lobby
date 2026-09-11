@@ -6,7 +6,7 @@ plugins {
 group = 'com.silver'
 version = '1.0.0'
 
-java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 
 repositories {
   mavenCentral()
@@ -16,11 +16,11 @@ repositories {
 
 dependencies {
   // Use a published release:
-  compileOnly 'com.velocitypowered:velocity-api:3.2.0-SNAPSHOT'
-  annotationProcessor 'com.velocitypowered:velocity-api:3.2.0-SNAPSHOT'
+  compileOnly 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
+  annotationProcessor 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
   compileOnly 'com.google.code.gson:gson:2.10.1'
   implementation "org.yaml:snakeyaml:2.2"
-  testImplementation 'com.velocitypowered:velocity-api:3.2.0-SNAPSHOT'
+  testImplementation 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
   testImplementation 'org.slf4j:slf4j-api:2.0.13'
   testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.3'
   testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.11.3'
@@ -28,7 +28,7 @@ dependencies {
 }
 
 tasks.withType(JavaCompile).configureEach {
-  options.release = 17
+  options.release = 21
 }
 
 tasks.test {
