@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Encapsulates the behavioural logic for the /wl portal command so it can be unit tested.
@@ -14,13 +15,13 @@ public class PortalCommandHandler {
 
     public interface Dependencies {
         boolean verifyPortalToken(String target, String token);
-        void rememberSourcePortal(UUID playerId, String portalName);
-        void unlockServerFor(UUID playerId, String target);
+        CompletionStage<?> createTransfer(UUID playerId, String sourceServer, String targetServer, String arrivalPortal);
         Optional<String> currentServerName(Player player);
         Optional<HoldingConnection> resolveHoldingServer(Player player, String target, Optional<String> originServer);
         void beginStickyWait(UUID playerId, String target, Optional<String> originServer);
         void markInternalOnce(UUID playerId);
         void notifyInvalidToken(Player player);
+        void notifyTransferFailure(Player player);
         String holdingServerName();
     }
 
@@ -37,14 +38,14 @@ public class PortalCommandHandler {
         this.dependencies = Objects.requireNonNull(dependencies, "dependencies");
     }
 
-    public boolean handle(Player player, String targetServer, String token, Optional<String> sourcePortalOpt) {
+    public boolean handle(Player player, String targetServer, String token, Optional<String> arrivalPortalOpt) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(targetServer, "targetServer");
         Objects.requireNonNull(token, "token");
-        Objects.requireNonNull(sourcePortalOpt, "sourcePortalOpt");
+        Objects.requireNonNull(arrivalPortalOpt, "arrivalPortalOpt");
 
-        log.info("[WakeUpLobby] /wl portal: player={} target={} token={} sourcePortal={}",
-                player.getUsername(), targetServer, token, sourcePortalOpt.orElse("<none>"));
+        log.info("[WakeUpLobby] /wl portal: player={} target={} token={} arrivalPortal={}",
+                player.getUsername(), targetServer, token, arrivalPortalOpt.orElse("<none>"));
 
         if (!dependencies.verifyPortalToken(targetServer, token)) {
             log.warn("[WakeUpLobby] Portal token verification failed for target={} token={}", targetServer, token);
@@ -54,24 +55,15 @@ public class PortalCommandHandler {
 
         log.info("[WakeUpLobby] Portal token verified successfully");
 
-        return handleAuthorized(player, targetServer, sourcePortalOpt);
+        return handleAuthorized(player, targetServer, arrivalPortalOpt);
     }
 
-    public boolean handleAuthorized(Player player, String targetServer, Optional<String> sourcePortalOpt) {
+    public boolean handleAuthorized(Player player, String targetServer, Optional<String> arrivalPortalOpt) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(targetServer, "targetServer");
-        Objects.requireNonNull(sourcePortalOpt, "sourcePortalOpt");
+        Objects.requireNonNull(arrivalPortalOpt, "arrivalPortalOpt");
 
         UUID playerId = player.getUniqueId();
-        sourcePortalOpt.ifPresentOrElse(
-                portal -> {
-                    dependencies.rememberSourcePortal(playerId, portal);
-                    log.info("[WakeUpLobby] Stored source portal '{}' for player {}", portal, player.getUsername());
-                },
-                () -> log.warn("[WakeUpLobby] No source portal name provided for player {}", player.getUsername())
-        );
-
-        dependencies.unlockServerFor(playerId, targetServer);
         Optional<String> originServer = dependencies.currentServerName(player);
         log.info("[WakeUpLobby] /wl portal: origin='{}' target='{}' holding='{}'",
                 originServer.orElse("<none>"), targetServer, dependencies.holdingServerName());
@@ -83,9 +75,20 @@ public class PortalCommandHandler {
             return false;
         }
 
-        dependencies.beginStickyWait(playerId, targetServer, originServer);
-        dependencies.markInternalOnce(playerId);
-        holdingConnection.get().connect();
+        String sourceServer = originServer.orElse("unknown");
+        String arrivalPortal = arrivalPortalOpt.filter(value -> !value.isBlank()).orElse("");
+        dependencies.createTransfer(playerId, sourceServer, targetServer, arrivalPortal)
+                .whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        log.error("[WakeUpLobby] Failed to persist portal transfer for {} -> {}",
+                                player.getUsername(), targetServer, failure);
+                        dependencies.notifyTransferFailure(player);
+                        return;
+                    }
+                    dependencies.beginStickyWait(playerId, targetServer, originServer);
+                    dependencies.markInternalOnce(playerId);
+                    holdingConnection.get().connect();
+                });
         return true;
     }
 }

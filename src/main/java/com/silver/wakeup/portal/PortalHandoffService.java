@@ -1,57 +1,58 @@
 package com.silver.wakeup.portal;
 
+import com.silver.wakeup.state.PortalTransfer;
+import com.silver.wakeup.state.RoutingStateService;
 import org.slf4j.Logger;
 
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 
-/**
- * Tracks portal handoff state per player and produces handshake payloads.
- */
-public class PortalHandoffService {
-    private final ConcurrentHashMap<UUID, String> portalsByPlayer = new ConcurrentHashMap<>();
+/** Coordinates durable, target-bound and single-consumption portal handoffs. */
+public final class PortalHandoffService {
+    private final RoutingStateService routingState;
     private final Logger log;
 
-    public PortalHandoffService(Logger log) {
+    public PortalHandoffService(RoutingStateService routingState, Logger log) {
+        this.routingState = Objects.requireNonNull(routingState, "routingState");
         this.log = Objects.requireNonNull(log, "log");
     }
 
-    public void rememberSourcePortal(UUID playerId, String portalName) {
-        Objects.requireNonNull(playerId, "playerId");
-        Objects.requireNonNull(portalName, "portalName");
-        portalsByPlayer.put(playerId, portalName);
-        log.info("[PortalHandoffService] stored source portal '{}' for {}", portalName, playerId);
+    public CompletableFuture<PortalTransfer> createTransfer(
+            UUID playerId, String sourceServer, String targetServer, String arrivalPortal) {
+        return routingState.createTransfer(playerId, sourceServer, targetServer, arrivalPortal);
     }
 
-    public Optional<String> peekSourcePortal(UUID playerId) {
-        Objects.requireNonNull(playerId, "playerId");
-        return Optional.ofNullable(portalsByPlayer.get(playerId));
+    public Optional<PortalTransfer> pendingTransfer(UUID playerId) {
+        return routingState.pendingTransfer(playerId);
     }
 
-    public Optional<String> consumeSourcePortal(UUID playerId) {
-        Objects.requireNonNull(playerId, "playerId");
-        String portalName = portalsByPlayer.remove(playerId);
-        if (portalName == null) {
-            return Optional.empty();
-        }
-        log.info("[PortalHandoffService] consumed source portal '{}' for {}", portalName, playerId);
-        return Optional.of(portalName);
+    public CompletableFuture<Optional<PortalTransfer>> claimForTarget(UUID playerId, String targetServer) {
+        return routingState.claimForTarget(playerId, targetServer);
     }
 
-    public void clearSourcePortal(UUID playerId) {
-        Objects.requireNonNull(playerId, "playerId");
-        boolean removed = portalsByPlayer.remove(playerId) != null;
-        log.info("[PortalHandoffService] cleared source portal for {} (removed={})", playerId, removed);
+    public CompletableFuture<Void> connectionFailed(UUID playerId, PortalTransfer transfer) {
+        return routingState.connectionFailed(playerId, transfer);
     }
 
-    public byte[] createResponsePayload(UUID playerId) {
-        Objects.requireNonNull(playerId, "playerId");
-        Optional<String> portalName = peekSourcePortal(playerId);
-        Optional<PortalHandoffPayloadCodec.PortalHandoffResponse> response = portalName.map(name ->
-            new PortalHandoffPayloadCodec.PortalHandoffResponse(playerId, name)
-        );
+    public CompletableFuture<Void> completeConnectedTransfer(UUID playerId, String server) {
+        return routingState.completeConnectedTransfer(playerId, server);
+    }
+
+    public CompletableFuture<Void> cancelActiveTransfer(UUID playerId) {
+        return routingState.cancelActiveTransfer(playerId);
+    }
+
+    public byte[] consumeResponsePayload(UUID playerId, String requestingServer) {
+        Optional<PortalTransfer> transfer = routingState.consumeHandoff(playerId, requestingServer)
+                .filter(value -> !value.arrivalPortal().isBlank());
+        transfer.ifPresent(value -> log.info(
+                "[PortalHandoffService] delivering transfer={} arrival='{}' player={} target={}",
+                value.transferId(), value.arrivalPortal(), playerId, value.targetServer()));
+        Optional<PortalHandoffPayloadCodec.PortalHandoffResponse> response = transfer.map(value ->
+                new PortalHandoffPayloadCodec.PortalHandoffResponse(
+                        value.transferId(), playerId, value.arrivalPortal(), value.expiresAt().toEpochMilli()));
         return PortalHandoffPayloadCodec.encode(response);
     }
 }

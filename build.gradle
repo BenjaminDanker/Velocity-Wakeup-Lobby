@@ -1,6 +1,6 @@
 plugins {
   id 'java'
-  id 'com.github.johnrengelman.shadow' version '8.1.1'
+  id 'com.gradleup.shadow' version '9.3.0'
 }
 
 group = 'com.silver'
@@ -20,6 +20,8 @@ dependencies {
   annotationProcessor 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
   compileOnly 'com.google.code.gson:gson:2.10.1'
   implementation "org.yaml:snakeyaml:2.2"
+  implementation 'com.zaxxer:HikariCP:7.0.2'
+  implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.7'
   testImplementation 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
   testImplementation 'org.slf4j:slf4j-api:2.0.13'
   testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.3'
@@ -37,6 +39,7 @@ tasks.test {
 }
 
 tasks.shadowJar {
+    mergeServiceFiles()
   archiveBaseName.set('wake-up-lobby')
   archiveClassifier.set('')
 }

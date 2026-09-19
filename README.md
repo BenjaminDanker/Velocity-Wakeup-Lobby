@@ -36,11 +36,22 @@ The compiled plugin JAR will be in `build/libs/wake-up-lobby.jar`.
 ## Installation
 
 1. Place `wake-up-lobby.jar` in your Velocity proxy's `plugins/` directory
-2. Start/restart your Velocity proxy - a default configuration file will be generated at `plugins/wakeuplobby/lobby-config.yml`
-3. Edit the configuration file to match your setup (see Configuration below)
-4. Run `/wakeuplobby reload` to apply changes without restarting
-5. Configure per-portal secrets if using portal authentication
-6. Add proxy-level operators to `plugins/wakeuplobby/velocity-ops.json` (or use `/wakeuplobby ops`)
+2. Create a private MariaDB environment file at `~/.config/wakeuplobby/database.env`
+3. Start/restart your Velocity proxy - a default configuration file will be generated at `plugins/wakeuplobby/config.yml`
+4. Edit the configuration file to match your setup (see Configuration below)
+5. Run `/wakeuplobby reload` to apply routing configuration changes without restarting
+6. Configure per-portal secrets if using portal authentication
+7. Add proxy-level operators to `plugins/wakeuplobby/velocity-ops.json` (or use `/wakeuplobby ops`)
+
+The database environment file must be readable only by the Velocity user:
+
+```properties
+WAKEUP_DB_JDBC_URL=jdbc:mariadb://database-host:3306/minecraft
+WAKEUP_DB_USER=wakeuplobby
+WAKEUP_DB_PASSWORD=replace-me
+```
+
+WakeUpLobby applies its versioned `wakeup_*` schema migration during startup. JDBC work is kept off Velocity's event threads.
 
 ### Ecosystem Setup
 
@@ -66,7 +77,7 @@ See the [MCServerPortals README](https://github.com/BenjaminDanker/MCServerPorta
 
 ## Configuration
 
-Create `plugins/wakeuplobby/lobby-config.yml`:
+Create `plugins/wakeuplobby/config.yml`:
 
 ```yaml
 # IP address to broadcast for wake pings
@@ -109,7 +120,7 @@ per_portal_secrets:
 - `/wakeuplobby ops list` - List velocity ops
 - `/wakeuplobby ops add <player>` - Add a velocity op (saved immediately to JSON)
 - `/wakeuplobby ops remove <player>` - Remove a velocity op (saved immediately to JSON)
-- `/wl portal <target> <token> [sourcePortal]` - Handle portal handoff with authentication
+- `/wl portal <target> <token> [arrivalPortal]` - Handle a durable, one-shot portal transfer
 - `/server [name]` - Connect to a server (velocity ops or `wakeuplobby.server`)
 
 **Permissions:**
@@ -148,7 +159,7 @@ Portal handoff is initiated by other plugins/servers and verified using cryptogr
 
 - **VelocityPlugin** - Main plugin entry point and event handlers
 - **RuntimeState** - Container for runtime services and configuration
-- **PlayerStateStore** - Manages player state across lobby/server transitions
+- **RoutingStateService** - Stores player routing, visits, and pending portal transfers in MariaDB
 - **StickyRouter** - Routes players based on group membership
 - **PortalHandoffService** - Manages secure player handoffs to other servers
 - **PortalTokenVerifier** - Verifies portal authentication tokens

@@ -276,10 +276,10 @@ public class CommandRegistrar {
 
                         String target = args[1];
                         String token = args[2];
-                        String sourcePortal = args.length > 3 ? args[3] : null;
+                        String arrivalPortal = args.length > 3 ? args[3] : null;
 
-                        logger.info("[WakeUpLobby] /wl portal: player={} target={} token={} sourcePortal={}",
-                                player.getUsername(), target, token, sourcePortal);
+                        logger.info("[WakeUpLobby] /wl portal: player={} target={} token={} arrivalPortal={}",
+                                player.getUsername(), target, token, arrivalPortal);
 
                         if (portalCommandHandler == null) {
                             logger.warn("[WakeUpLobby] /wl portal invoked before initialization completed");
@@ -287,7 +287,7 @@ public class CommandRegistrar {
                             return;
                         }
 
-                        portalCommandHandler.handle(player, target, token, Optional.ofNullable(sourcePortal));
+                        portalCommandHandler.handle(player, target, token, Optional.ofNullable(arrivalPortal));
                     }
             }
         );
@@ -335,6 +335,7 @@ public class CommandRegistrar {
 
                         // Manual admin switch should cancel any in-progress sticky auto-move sequence.
                         runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
+                        plugin.cancelPortalTransfer(player.getUniqueId());
                         runtime.stickyRouter().markInternalOnce(player.getUniqueId());
                         player.createConnectionRequest(serverOpt.get()).fireAndForget();
                     }
@@ -387,6 +388,7 @@ public class CommandRegistrar {
 
                         // Cancel any sticky wait exactly like the /server override
                         runtime.stickyRouter().cancelStickyWait(targetPlayer.getUniqueId());
+                        plugin.cancelPortalTransfer(targetPlayer.getUniqueId());
                         runtime.stickyRouter().markInternalOnce(targetPlayer.getUniqueId());
 
                         targetPlayer.createConnectionRequest(serverOpt.get()).fireAndForget();
@@ -497,6 +499,7 @@ public class CommandRegistrar {
 
                                 // Manual return should cancel any in-progress sticky auto-move sequence.
                                 runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
+                                plugin.cancelPortalTransfer(player.getUniqueId());
                                 runtime.stickyRouter().markInternalOnce(player.getUniqueId());
                                 player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                                     if (err != null || result == null || !result.isSuccessful()) {
@@ -513,6 +516,7 @@ public class CommandRegistrar {
                         String returnOriginImmediate = runtime.stickyRouter().returnOriginServer(player.getUniqueId());
                         runtime.stickyRouter().clearReturnEligibility(player.getUniqueId());
                         runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
+                        plugin.cancelPortalTransfer(player.getUniqueId());
                         runtime.stickyRouter().markInternalOnce(player.getUniqueId());
                         player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                             if (err != null || result == null || !result.isSuccessful()) {

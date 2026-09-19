@@ -12,17 +12,23 @@ import java.util.UUID;
  * Encodes and decodes the Velocity ↔ Fabric portal handoff payload.
  */
 public final class PortalHandoffPayloadCodec {
+    public static final byte VERSION_2 = 2;
+
     private PortalHandoffPayloadCodec() {
     }
 
     public static byte[] encode(Optional<PortalHandoffResponse> response) {
         ByteArrayDataOutput out = ByteStreams.newDataOutput();
+        out.writeByte(VERSION_2);
         if (response.isPresent()) {
             PortalHandoffResponse payload = response.get();
             out.writeBoolean(true);
+            out.writeLong(payload.transferId().getMostSignificantBits());
+            out.writeLong(payload.transferId().getLeastSignificantBits());
             writeString(out, payload.portalName());
             out.writeLong(payload.playerId().getMostSignificantBits());
             out.writeLong(payload.playerId().getLeastSignificantBits());
+            out.writeLong(payload.expiresAtMs());
         } else {
             out.writeBoolean(false);
         }
@@ -31,15 +37,21 @@ public final class PortalHandoffPayloadCodec {
 
     public static Optional<PortalHandoffResponse> decode(byte[] payload) {
         ByteArrayDataInput in = ByteStreams.newDataInput(payload);
+        byte version = in.readByte();
+        if (version != VERSION_2) {
+            throw new IllegalArgumentException("Unsupported portal handoff version: " + version);
+        }
         boolean hasPortal = in.readBoolean();
         if (!hasPortal) {
             return Optional.empty();
         }
 
+        UUID transferId = new UUID(in.readLong(), in.readLong());
         String portalName = readString(in);
         long msb = in.readLong();
         long lsb = in.readLong();
-        return Optional.of(new PortalHandoffResponse(new UUID(msb, lsb), portalName));
+        long expiresAtMs = in.readLong();
+        return Optional.of(new PortalHandoffResponse(transferId, new UUID(msb, lsb), portalName, expiresAtMs));
     }
 
     private static void writeString(ByteArrayDataOutput out, String value) {
@@ -84,8 +96,11 @@ public final class PortalHandoffPayloadCodec {
         return result;
     }
 
-    public record PortalHandoffResponse(UUID playerId, String portalName) {
+    public record PortalHandoffResponse(UUID transferId, UUID playerId, String portalName, long expiresAtMs) {
         public PortalHandoffResponse {
+            if (transferId == null) {
+                throw new IllegalArgumentException("transferId must not be null");
+            }
             if (portalName == null || portalName.isBlank()) {
                 throw new IllegalArgumentException("portalName must not be blank");
             }

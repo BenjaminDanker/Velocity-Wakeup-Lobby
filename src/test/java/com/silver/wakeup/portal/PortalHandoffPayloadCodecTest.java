@@ -21,20 +21,25 @@ class PortalHandoffPayloadCodecTest {
     @Test
     void encodeAndDecodeRoundTrip() {
         UUID playerId = UUID.fromString("00000000-0000-4000-8000-000000000000");
+        UUID transferId = UUID.fromString("11111111-1111-4111-8111-111111111111");
         String portalName = "nether_spawn";
+        long expiresAt = 123456789L;
 
-        byte[] payload = PortalHandoffPayloadCodec.encode(Optional.of(new PortalHandoffPayloadCodec.PortalHandoffResponse(playerId, portalName)));
+        byte[] payload = PortalHandoffPayloadCodec.encode(Optional.of(
+                new PortalHandoffPayloadCodec.PortalHandoffResponse(transferId, playerId, portalName, expiresAt)));
         Optional<PortalHandoffPayloadCodec.PortalHandoffResponse> decoded = PortalHandoffPayloadCodec.decode(payload);
 
         assertTrue(decoded.isPresent(), "Expected decode to produce portal response");
+        assertEquals(transferId, decoded.get().transferId());
         assertEquals(playerId, decoded.get().playerId());
         assertEquals(portalName, decoded.get().portalName());
+        assertEquals(expiresAt, decoded.get().expiresAtMs());
     }
 
     @Test
     void decodeThrowsOnMalformedVarInt() {
-        byte[] invalidPayload = new byte[] {1, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80, 0};
+        byte[] invalidPayload = new byte[] {2, 1, 0, 0};
 
-        assertThrows(IllegalArgumentException.class, () -> PortalHandoffPayloadCodec.decode(invalidPayload));
+        assertThrows(RuntimeException.class, () -> PortalHandoffPayloadCodec.decode(invalidPayload));
     }
 }

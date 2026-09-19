@@ -18,7 +18,7 @@ import java.util.UUID;
  * - long issuedAtMs
  * - UUID (msb, lsb)
  * - targetServer (string)
- * - sourcePortal (string, may be empty)
+ * - arrivalPortal (string, may be empty)
  * - nonce (string)
  * - signature bytes (varint length + bytes)
  */
@@ -37,7 +37,7 @@ public final class PortalRequestPayloadCodec {
         out.writeLong(request.playerId().getMostSignificantBits());
         out.writeLong(request.playerId().getLeastSignificantBits());
         writeString(out, request.targetServer());
-        writeString(out, request.sourcePortal());
+        writeString(out, request.arrivalPortal());
         writeString(out, request.nonce());
         writeBytes(out, request.signature());
         return out.toByteArray();
@@ -60,7 +60,7 @@ public final class PortalRequestPayloadCodec {
         UUID playerId = new UUID(msb, lsb);
 
         String target = readString(in);
-        String sourcePortal = readString(in);
+        String arrivalPortal = readString(in);
         String nonce = readString(in);
         byte[] signature = readBytes(in, 128);
 
@@ -68,7 +68,7 @@ public final class PortalRequestPayloadCodec {
             return Optional.empty();
         }
 
-        return Optional.of(new PortalRequest(playerId, target, sourcePortal, issuedAtMs, nonce, signature));
+        return Optional.of(new PortalRequest(playerId, target, arrivalPortal, issuedAtMs, nonce, signature));
     }
 
     public static byte[] encodeUnsigned(PortalRequestUnsigned unsignedRequest) {
@@ -80,7 +80,7 @@ public final class PortalRequestPayloadCodec {
         out.writeLong(unsignedRequest.playerId().getMostSignificantBits());
         out.writeLong(unsignedRequest.playerId().getLeastSignificantBits());
         writeString(out, unsignedRequest.targetServer());
-        writeString(out, unsignedRequest.sourcePortal());
+        writeString(out, unsignedRequest.arrivalPortal());
         writeString(out, unsignedRequest.nonce());
         return out.toByteArray();
     }
@@ -152,32 +152,32 @@ public final class PortalRequestPayloadCodec {
 
     public record PortalRequest(UUID playerId,
                                 String targetServer,
-                                String sourcePortal,
+                                String arrivalPortal,
                                 long issuedAtMs,
                                 String nonce,
                                 byte[] signature) {
         public PortalRequest {
             Objects.requireNonNull(playerId, "playerId");
             Objects.requireNonNull(targetServer, "targetServer");
-            Objects.requireNonNull(sourcePortal, "sourcePortal");
+            Objects.requireNonNull(arrivalPortal, "arrivalPortal");
             Objects.requireNonNull(nonce, "nonce");
             Objects.requireNonNull(signature, "signature");
         }
 
         public PortalRequestUnsigned unsigned() {
-            return new PortalRequestUnsigned(playerId, targetServer, sourcePortal, issuedAtMs, nonce);
+            return new PortalRequestUnsigned(playerId, targetServer, arrivalPortal, issuedAtMs, nonce);
         }
     }
 
     public record PortalRequestUnsigned(UUID playerId,
                                         String targetServer,
-                                        String sourcePortal,
+                                        String arrivalPortal,
                                         long issuedAtMs,
                                         String nonce) {
         public PortalRequestUnsigned {
             Objects.requireNonNull(playerId, "playerId");
             Objects.requireNonNull(targetServer, "targetServer");
-            Objects.requireNonNull(sourcePortal, "sourcePortal");
+            Objects.requireNonNull(arrivalPortal, "arrivalPortal");
             Objects.requireNonNull(nonce, "nonce");
         }
     }

@@ -8,6 +8,8 @@ import org.slf4j.helpers.NOPLogger;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
@@ -39,8 +41,7 @@ class PortalCommandHandlerTest {
 
         assertFalse(result);
         assertTrue(dependencies.invalidTokenNotified, "Expected invalid token notification");
-        assertFalse(dependencies.rememberCalled, "Should not remember portal when token is invalid");
-        assertFalse(dependencies.unlockCalled, "Should not unlock server when token is invalid");
+        assertFalse(dependencies.createCalled, "Should not create a transfer when token is invalid");
     }
 
     @Test
@@ -48,10 +49,9 @@ class PortalCommandHandlerTest {
         boolean result = handler.handle(player, "target-server", "good-token", Optional.of("portal_a"));
 
         assertTrue(result);
-        assertTrue(dependencies.rememberCalled);
-        assertEquals(playerId, dependencies.rememberPlayerId);
-        assertEquals("portal_a", dependencies.rememberPortalName);
-        assertTrue(dependencies.unlockCalled, "Expected destination to be unlocked");
+        assertTrue(dependencies.createCalled);
+        assertEquals(playerId, dependencies.createPlayerId);
+        assertEquals("portal_a", dependencies.arrivalPortal);
         assertTrue(dependencies.beginStickyCalled, "Expected sticky wait to begin");
         assertTrue(dependencies.markInternalCalled, "Expected internal mark to be set");
         assertTrue(dependencies.connectionResolved, "Expected holding connection to be resolved");
@@ -72,10 +72,9 @@ class PortalCommandHandlerTest {
     private static final class StubDependencies implements PortalCommandHandler.Dependencies {
         boolean verifyResult = true;
         boolean holdingAvailable = true;
-        boolean rememberCalled;
-        UUID rememberPlayerId;
-        String rememberPortalName;
-        boolean unlockCalled;
+        boolean createCalled;
+        UUID createPlayerId;
+        String arrivalPortal;
         boolean beginStickyCalled;
         boolean markInternalCalled;
         boolean invalidTokenNotified;
@@ -88,15 +87,11 @@ class PortalCommandHandlerTest {
         }
 
         @Override
-        public void rememberSourcePortal(UUID playerId, String portalName) {
-            rememberCalled = true;
-            rememberPlayerId = playerId;
-            rememberPortalName = portalName;
-        }
-
-        @Override
-        public void unlockServerFor(UUID playerId, String target) {
-            unlockCalled = true;
+        public CompletionStage<?> createTransfer(UUID playerId, String sourceServer, String targetServer, String arrivalPortal) {
+            createCalled = true;
+            createPlayerId = playerId;
+            this.arrivalPortal = arrivalPortal;
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override
@@ -126,6 +121,10 @@ class PortalCommandHandlerTest {
         @Override
         public void notifyInvalidToken(Player player) {
             invalidTokenNotified = true;
+        }
+
+        @Override
+        public void notifyTransferFailure(Player player) {
         }
 
         @Override

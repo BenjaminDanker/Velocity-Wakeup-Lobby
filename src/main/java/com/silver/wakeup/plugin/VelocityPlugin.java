@@ -13,7 +13,8 @@ import com.silver.wakeup.portal.PortalHandoffService;
 import com.silver.wakeup.portal.PortalRequestPayloadCodec;
 import com.silver.wakeup.portal.PortalRequestVerifier;
 import com.silver.wakeup.portal.PortalTokenVerifier;
-import com.silver.wakeup.state.PlayerStateStore;
+import com.silver.wakeup.state.PortalTransfer;
+import com.silver.wakeup.state.RoutingStateService;
 import com.silver.wakeup.config.ReturnSpecial;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.command.CommandExecuteEvent;
@@ -25,6 +26,7 @@ import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
@@ -42,7 +44,6 @@ import java.io.DataOutputStream;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -85,7 +86,7 @@ public class VelocityPlugin {
     // config/runtime
     private LobbyConfigLoader configLoader;
     private RuntimeState runtime;
-    private PlayerStateStore stateStore;
+    private RoutingStateService routingState;
     private PortalHandoffService portalHandoffService;
     private PortalCommandHandler portalCommandHandler;
     private PortalTokenVerifier portalTokenVerifier;
@@ -124,11 +125,6 @@ public class VelocityPlugin {
 
     private final Map<UUID, CompletableFuture<ReturnRemoveResponse>> pendingReturnRemovals = new ConcurrentHashMap<>();
 
-    // persistence
-    private final Map<UUID, String> lastServer = new ConcurrentHashMap<>();
-    private final Map<UUID, Set<String>> visited = new ConcurrentHashMap<>();
-    private final Map<UUID, String> lastListedServer = new ConcurrentHashMap<>();
-
     public String computeReturnDestination(UUID playerId) {
         LobbyConfig cfg = runtime == null ? null : runtime.currentConfig();
         List<String> order = cfg == null ? List.of() : cfg.returnServerOrder();
@@ -136,10 +132,10 @@ public class VelocityPlugin {
             return firstDefault();
         }
 
-        String lastListed = lastListedServer.get(playerId);
+        String lastListed = routingState.lastListedServer(playerId).orElse(null);
         String candidate = firstMatchingIgnoreCase(order, lastListed).orElse(order.get(0));
 
-        String last = lastServer.get(playerId);
+        String last = routingState.preferredServer(playerId).orElse(null);
         if (last != null && candidate.equalsIgnoreCase(last)) {
             int idx = indexOfIgnoreCase(order, candidate);
             if (idx > 0) {
@@ -255,7 +251,8 @@ public class VelocityPlugin {
             configLoader = new LobbyConfigLoader(logger, dataDir);
             configLoader.ensureDefaultConfig();
             portalTokenVerifier = new PortalTokenVerifier(logger);
-            portalHandoffService = new PortalHandoffService(logger);
+            routingState = RoutingStateService.initialize(logger);
+            portalHandoffService = new PortalHandoffService(routingState, logger);
             portalRequestVerifier = new PortalRequestVerifier(logger);
             velocityOpsStore = new VelocityOpsStore(dataDir, logger);
             velocityOpsStore.ensureFileAndLoad();
@@ -264,13 +261,7 @@ public class VelocityPlugin {
             securityManager = new SecurityManager(logger, whitelistStore);
             proxy.getEventManager().register(this, securityManager);
             runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
-            stateStore = new PlayerStateStore(dataDir, logger);
-
-            loadPlayerState();
-
             LobbyConfig config = loadConfig();
-            purgeHoldingFromStore();
-            purgeHoldingFromVisited();
 
             portalCommandHandler = new PortalCommandHandler(logger, new VelocityPortalCommandDependencies());
             commandRegistrar = new CommandRegistrar(proxy, runtime, portalCommandHandler, this, logger);
@@ -387,12 +378,12 @@ public class VelocityPlugin {
                 return;
             }
 
-            String sourcePortal = request.sourcePortal();
+            String arrivalPortal = request.arrivalPortal();
             boolean handled = portalCommandHandler != null
                 && portalCommandHandler.handleAuthorized(
                     player,
                     target,
-                    Optional.ofNullable(sourcePortal).filter(s -> !s.isBlank())
+                    Optional.ofNullable(arrivalPortal).filter(s -> !s.isBlank())
                 );
             if (!handled) {
                 logger.warn("[WakeUpLobby] Portal request was verified but handoff setup failed for player {} target {}",
@@ -520,13 +511,8 @@ public class VelocityPlugin {
         }
 
         UUID playerId = player.getUniqueId();
-        var portalOpt = portalHandoffService.peekSourcePortal(playerId);
-        portalOpt.ifPresentOrElse(
-                portal -> logger.info("[WakeUpLobby] Responding with portal handoff '{}' for {}", portal, player.getUsername()),
-                () -> logger.debug("[WakeUpLobby] No portal handoff data for {}", player.getUsername())
-        );
-
-        byte[] payload = portalHandoffService.createResponsePayload(playerId);
+        String requestingServer = event.getConnection().getServerInfo().getName();
+        byte[] payload = portalHandoffService.consumeResponsePayload(playerId, requestingServer);
         event.setResult(ServerLoginPluginMessageEvent.ResponseResult.reply(payload));
     }
 
@@ -648,6 +634,7 @@ public class VelocityPlugin {
             logger.info("[WakeUpLobby] onPreConnect: {} admin manual request '{}' while sticky-wait active; cancelling sticky-wait",
                     player.getUsername(), requested);
             runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
+            portalHandoffService.cancelActiveTransfer(player.getUniqueId());
         }
 
         // Block /server for non-admins (manual server switch = not preferred and not holding)
@@ -781,26 +768,28 @@ public class VelocityPlugin {
 
             runtime.stickyRouter().clearReturnEligibility(playerId);
 
-            visited.computeIfAbsent(playerId, k -> new HashSet<>()).add(srv);
-            logger.info("[WakeUpLobby] onConnected: added '{}' to visited set for {}", srv, p.getUsername());
-            proxy.getScheduler().buildTask(this, this::saveVisited).delay(Duration.ofSeconds(1)).schedule();
-
-            lastServer.put(playerId, srv);
-            proxy.getScheduler().buildTask(this, this::saveStore).delay(Duration.ofSeconds(1)).schedule();
-
-            logger.info("[WakeUpLobby] onConnected: {} now last='{}'", p.getUsername(), srv);
-
             LobbyConfig cfg = runtime.currentConfig();
-            if (cfg != null && cfg.returnServerOrder().stream().anyMatch(s -> s.equalsIgnoreCase(srv))) {
-                lastListedServer.put(playerId, srv);
-                proxy.getScheduler().buildTask(this, this::saveLastListed).delay(Duration.ofSeconds(1)).schedule();
-                logger.info("[WakeUpLobby] onConnected: {} lastListed='{}'", p.getUsername(), srv);
-            }
+            boolean listed = cfg != null && cfg.returnServerOrder().stream().anyMatch(s -> s.equalsIgnoreCase(srv));
+            routingState.recordSuccessfulConnection(playerId, srv, listed);
+            portalHandoffService.completeConnectedTransfer(playerId, srv);
+            logger.info("[WakeUpLobby] onConnected: {} recorded successful gameplay connection '{}'", p.getUsername(), srv);
             return;
         }
 
         logger.info("[WakeUpLobby] onConnected: {} connected to holding '{}', not recording as last/visited",
                 p.getUsername(), srv);
+
+        Optional<PortalTransfer> pendingTransfer = portalHandoffService.pendingTransfer(playerId);
+        if (pendingTransfer.isPresent() && !runtime.stickyRouter().hasStickyState(playerId)) {
+            PortalTransfer transfer = pendingTransfer.orElseThrow();
+            freshAdmissions.remove(playerId);
+            admissionQueue.remove(playerId);
+            offlineWaitManager.remove(playerId);
+            logger.info("[PortalTransfer] Resuming transfer={} for {} toward {}",
+                    transfer.transferId(), p.getUsername(), transfer.targetServer());
+            runtime.stickyRouter().beginStickyWait(playerId, transfer.targetServer(), transfer.sourceServer());
+            return;
+        }
 
         // Backend -> lobby -> backend transit already has StickyState and never enters
         // fresh-player admission.
@@ -830,6 +819,19 @@ public class VelocityPlugin {
         freshAdmissions.remove(playerId);
         admissionQueue.remove(playerId);
         offlineWaitManager.remove(playerId);
+    }
+
+    void cancelPortalTransfer(UUID playerId) {
+        if (portalHandoffService != null) {
+            portalHandoffService.cancelActiveTransfer(playerId);
+        }
+    }
+
+    @Subscribe
+    public void onShutdown(ProxyShutdownEvent event) {
+        if (routingState != null) {
+            routingState.close();
+        }
     }
 
     private void placeFreshPlayer(Player player) {
@@ -1039,8 +1041,8 @@ public class VelocityPlugin {
 
         // This is the player's chosen routing state, not queue-owned destination state.
         // Persist it so preferredFor(UUID) continues to be the single source of truth.
-        lastServer.put(playerId, dest);
-        saveStore();
+        routingState.setPreferredServer(playerId, dest);
+        portalHandoffService.cancelActiveTransfer(playerId);
 
         offlineWaitManager.remove(playerId);
         enqueueAdmission(player, "§eReturn selected: §a" + dest + "§e. You have been added to the queue.");
@@ -1048,16 +1050,6 @@ public class VelocityPlugin {
     }
 
     /* =================== Helpers & config =================== */
-
-    private void loadPlayerState() {
-        lastServer.clear();
-        lastServer.putAll(stateStore.loadLastServers());
-        visited.clear();
-        visited.putAll(stateStore.loadVisitedServers());
-
-        lastListedServer.clear();
-        lastListedServer.putAll(stateStore.loadLastListedServers());
-    }
 
     private boolean hasBypass(Player p) {
         return p.hasPermission(SERVER_PERMISSION) || isVelocityOp(p.getUsername());
@@ -1117,7 +1109,7 @@ public class VelocityPlugin {
     }
 
     private Optional<String> preferredFor(UUID uuid) {
-        String v = lastServer.get(uuid);
+        String v = routingState.preferredServer(uuid).orElse(null);
         if (v != null && !v.equalsIgnoreCase(runtime.holdingServer())) return Optional.of(v);
         return Optional.ofNullable(firstDefault());
     }
@@ -1131,7 +1123,7 @@ public class VelocityPlugin {
     /** Highest index in default_group the player has visited; -1 if none. */
     private int maxVisitedIndex(UUID who) {
         var def = runtime.groupMembers("default_group");
-        var seen = visited.getOrDefault(who, Set.of());
+        var seen = routingState.visitedServers(who);
         int max = -1;
         for (int i = 0; i < def.size(); i++) if (seen.contains(def.get(i))) max = i;
         return max;
@@ -1140,7 +1132,7 @@ public class VelocityPlugin {
     /** Allowed targets in descending order: [tier, tier-1, ..., 0]. New players => [def[0]]  */
     private List<String> allowedTargetsDownward(UUID who) {
         var def = runtime.groupMembers("default_group");
-        var seen = visited.getOrDefault(who, Set.of());
+        var seen = routingState.visitedServers(who);
         int max = maxVisitedIndex(who);
         
         logger.info("[WakeUpLobby] allowedTargetsDownward: uuid={} visited={} maxIndex={}", who, seen, max);
@@ -1193,39 +1185,6 @@ public class VelocityPlugin {
         return ensureTokenVerifier();
     }
 
-    private void saveStore() {
-        stateStore.saveLastServers(lastServer);
-    }
-
-    private void saveVisited() {
-        stateStore.saveVisitedServers(visited);
-    }
-
-    private void saveLastListed() {
-        stateStore.saveLastListedServers(lastListedServer);
-    }
-
-    private void purgeHoldingFromStore() {
-        if (runtime == null) {
-            return;
-        }
-        boolean changed = stateStore.purgeHoldingFromLastServers(lastServer, runtime.holdingServer());
-        if (changed) {
-            logger.info("[WakeUpLobby] Purged holding server '{}' from last-server store", runtime.holdingServer());
-            saveStore();
-        }
-    }
-
-    private void purgeHoldingFromVisited() {
-        if (runtime == null) {
-            return;
-        }
-        if (stateStore.purgeHoldingFromVisited(visited, runtime.holdingServer())) {
-            logger.info("[WakeUpLobby] Purged holding server '{}' from visited store", runtime.holdingServer());
-            saveVisited();
-        }
-    }
-
     private Optional<String> currentServerName(Player p) {
         return p.getCurrentServer().map(cs -> cs.getServerInfo().getName());
     }
@@ -1237,16 +1196,9 @@ public class VelocityPlugin {
         }
 
         @Override
-        public void rememberSourcePortal(UUID playerId, String portalName) {
-            portalHandoffService.rememberSourcePortal(playerId, portalName);
-        }
-
-        @Override
-        public void unlockServerFor(UUID playerId, String target) {
-            visited.computeIfAbsent(playerId, k -> new HashSet<>()).add(target);
-            lastServer.put(playerId, target);
-            saveVisited();
-            saveStore();
+        public java.util.concurrent.CompletionStage<?> createTransfer(
+                UUID playerId, String sourceServer, String targetServer, String arrivalPortal) {
+            return portalHandoffService.createTransfer(playerId, sourceServer, targetServer, arrivalPortal);
         }
 
         @Override
@@ -1273,6 +1225,11 @@ public class VelocityPlugin {
         @Override
         public void notifyInvalidToken(Player player) {
             player.sendMessage(Component.text("§cInvalid portal token."));
+        }
+
+        @Override
+        public void notifyTransferFailure(Player player) {
+            player.sendMessage(Component.text("§cCould not create the server transfer. Please try again."));
         }
 
         @Override

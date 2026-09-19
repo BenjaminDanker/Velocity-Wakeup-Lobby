@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 
 /**
  * Handles the async sticky waiting loop for servers: Wake-on-LAN, ping checks,
@@ -35,6 +36,7 @@ final class StickySessionManager {
     private final ConcurrentHashMap<UUID, ScheduledTask> tickTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> recentOkPing = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> lastConnectAttemptMs = new ConcurrentHashMap<>();
+    private final Set<UUID> returnOffered = ConcurrentHashMap.newKeySet();
 
     StickySessionManager(ProxyServer proxy,
                          VelocityPlugin plugin,
@@ -85,6 +87,7 @@ final class StickySessionManager {
     void cleanupStickyState(UUID playerId) {
         stickyStates.remove(playerId);
         lastConnectAttemptMs.remove(playerId);
+        returnOffered.remove(playerId);
         ScheduledTask task = tickTasks.remove(playerId);
         if (task != null) {
             task.cancel();
@@ -151,32 +154,43 @@ final class StickySessionManager {
                 }
                 lastConnectAttemptMs.put(playerId, now);
 
-                player.sendActionBar(Component.text("✅ " + state.target() + " is ready. Moving you now…"));
-                router.markInternalOnce(playerId);
-
-                Optional<String> sourcePortal = portalHandoffService.peekSourcePortal(playerId);
-                player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, connectErr) -> {
-                    if (result != null && result.isSuccessful()) {
-                        sourcePortal.ifPresent(name -> {
-                            player.spoofChatInput("/serverportals receive-portal " + name);
-                            portalHandoffService.clearSourcePortal(playerId);
-                        });
+                portalHandoffService.claimForTarget(playerId, state.target()).whenComplete((claimed, claimError) -> {
+                    if (claimError != null) {
+                        logger.error("[StickySession] Failed to claim portal transfer for {} -> {}",
+                                player.getUsername(), state.target(), claimError);
+                        return;
+                    }
+                    Optional<Player> currentPlayer = proxy.getPlayer(playerId);
+                    if (currentPlayer.isEmpty()) {
+                        claimed.ifPresent(transfer -> portalHandoffService.connectionFailed(playerId, transfer));
                         cleanupStickyState(playerId);
                         return;
                     }
-
-                    if (connectErr != null) {
-                        logger.warn("[StickySession] Connection to '{}' failed for {}: {}",
-                                state.target(), player.getUsername(), connectErr.toString());
-                    } else {
-                        logger.warn("[StickySession] Connection to '{}' was not successful for {} (no exception)",
-                                state.target(), player.getUsername());
-                    }
+                    Player connectedPlayer = currentPlayer.get();
+                    connectedPlayer.sendActionBar(Component.text("✅ " + state.target() + " is ready. Moving you now…"));
+                    router.markInternalOnce(playerId);
+                    connectedPlayer.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, connectErr) -> {
+                        if (result != null && result.isSuccessful()) {
+                            cleanupStickyState(playerId);
+                            return;
+                        }
+                        claimed.ifPresent(transfer -> portalHandoffService.connectionFailed(playerId, transfer));
+                        if (connectErr != null) {
+                            logger.warn("[StickySession] Connection to '{}' failed for {}: {}",
+                                    state.target(), connectedPlayer.getUsername(), connectErr.toString());
+                        } else {
+                            logger.warn("[StickySession] Connection to '{}' was not successful for {} (no exception)",
+                                    state.target(), connectedPlayer.getUsername());
+                        }
+                    });
                 });
                 return;
             }
 
             if (System.currentTimeMillis() >= state.deadlineMs()) {
+                if (!returnOffered.add(playerId)) {
+                    return;
+                }
                 router.markReturnEligible(playerId, state.originServer(), state.target());
 
                 String dest = plugin.computeReturnDestination(playerId);
@@ -189,8 +203,6 @@ final class StickySessionManager {
                             "⚠ Server may be down. You can try reconnecting or use /return to go back to " + dest
                                     + ". Using /return will remove " + lossList + "."));
                 }
-
-                cleanupStickyState(playerId);
             } else {
                 player.sendActionBar(Component.text("⏳ Starting " + state.target() + "…"));
             }
