@@ -101,7 +101,11 @@ public class SecurityManager {
         
         // Add more rigorous forwarding validation checks if needed
         // Velocity handles 'online-mode' validation if configured properly, but we can verify player state
-        if (!event.getPlayer().isOnlineMode()) {
+        // Floodgate players are intentionally represented as offline-mode players
+        // to Velocity, but are authenticated by Floodgate. Their configured
+        // username prefix (".") cannot occur in a normal Java username.
+        boolean floodgatePlayer = event.getPlayer().getUsername().startsWith(".");
+        if (!event.getPlayer().isOnlineMode() && !floodgatePlayer) {
             logger.warn("[Security] Rejecting offline mode connection for {}", event.getPlayer().getUsername());
             event.setResult(ResultedEvent.ComponentResult.denied(
                 Component.text("Offline mode connections are not allowed.", NamedTextColor.RED)
