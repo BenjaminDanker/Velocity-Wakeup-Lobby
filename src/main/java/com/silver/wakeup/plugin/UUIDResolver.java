@@ -40,15 +40,26 @@ public class UUIDResolver {
      * @return CompletableFuture containing the UUID if found, empty otherwise
      */
     public CompletableFuture<Optional<UUID>> resolveUUID(String name) {
-        // First check if player is online
-        Optional<UUID> onlineUuid = proxy.getPlayer(name).map(player -> player.getUniqueId());
+        if (name == null || name.isBlank()) return CompletableFuture.completedFuture(Optional.empty());
+        String lookup = name.strip();
+        // Velocity's name lookup is not consistent for Floodgate's leading-dot identities;
+        // compare the live names directly before considering any external account service.
+        Optional<UUID> onlineUuid = proxy.getAllPlayers().stream()
+                .filter(player -> player.getUsername().equalsIgnoreCase(lookup))
+                .map(player -> player.getUniqueId()).findFirst();
         if (onlineUuid.isPresent()) {
             return CompletableFuture.completedFuture(onlineUuid);
         }
 
+        // Mojang does not own Floodgate identities. Their UUIDs must come from the online
+        // proxy or the central known-name cache, never a fabricated Java UUID.
+        if (lookup.startsWith(".") || !lookup.matches("[A-Za-z0-9_]{1,16}")) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
         // Fall back to Mojang API with retry logic and timeout
         CompletableFuture<Optional<UUID>> future = CompletableFuture.supplyAsync(() -> 
-            resolveUUIDWithRetry(name)
+            resolveUUIDWithRetry(lookup)
         );
         
         // Apply overall timeout to prevent indefinite waiting

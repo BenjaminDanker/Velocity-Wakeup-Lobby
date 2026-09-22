@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import javax.sql.DataSource;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -77,6 +78,10 @@ public final class RoutingStateService implements AutoCloseable {
 
     public Optional<String> preferredServer(UUID playerId) {
         return Optional.ofNullable(preferredServers.get(playerId));
+    }
+
+    public DataSource dataSource() {
+        return repository.dataSource();
     }
 
     public Optional<String> lastListedServer(UUID playerId) {

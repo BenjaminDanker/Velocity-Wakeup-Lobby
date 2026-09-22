@@ -17,11 +17,10 @@ import java.util.stream.Collectors;
  * Proxies a command to a backend namespaced command while enforcing simple selector restrictions.
  */
 final class SanitizedForwardCommand implements SimpleCommand {
-    private static final String SELECTOR_PERMISSION = "wakeuplobby.selectors";
-
     private final ProxyServer proxy;
     private final Logger logger;
     private final Predicate<Player> bypassCheck;
+    private final Predicate<Player> selectorCheck;
     private final String backendLiteral;
     private final String displayLiteral;
     private final boolean requiresTarget;
@@ -29,12 +28,14 @@ final class SanitizedForwardCommand implements SimpleCommand {
     SanitizedForwardCommand(ProxyServer proxy,
                             Logger logger,
                             Predicate<Player> bypassCheck,
+                            Predicate<Player> selectorCheck,
                             String backendLiteral,
                             String displayLiteral,
                             boolean requiresTarget) {
         this.proxy = proxy;
         this.logger = logger;
         this.bypassCheck = bypassCheck;
+        this.selectorCheck = selectorCheck;
         this.backendLiteral = backendLiteral;
         this.displayLiteral = displayLiteral;
         this.requiresTarget = requiresTarget;
@@ -53,7 +54,7 @@ final class SanitizedForwardCommand implements SimpleCommand {
             return;
         }
 
-        boolean canUseSelectors = player.hasPermission(SELECTOR_PERMISSION)
+        boolean canUseSelectors = (selectorCheck != null && selectorCheck.test(player))
             || (bypassCheck != null && bypassCheck.test(player));
         if (!canUseSelectors && containsSelector(args)) {
             player.sendMessage(Component.text("⚠ Selectors are not permitted in this command."));

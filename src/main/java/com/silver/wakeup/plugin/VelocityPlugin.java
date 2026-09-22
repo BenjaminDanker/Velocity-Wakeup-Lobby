@@ -5,6 +5,17 @@ import com.silver.wakeup.admission.AdmissionClient;
 import com.silver.wakeup.admission.AdmissionQueue;
 import com.silver.wakeup.admission.BackendHealthMonitor;
 import com.silver.wakeup.admission.OfflineWaitManager;
+import com.silver.wakeup.authorization.AuthorizationBackendKeys;
+import com.silver.wakeup.authorization.CommandCatalogStore;
+import com.silver.wakeup.authorization.CommandCatalogReceiver;
+import com.silver.wakeup.authorization.AuthorizationService;
+import com.silver.wakeup.authorization.MariaDbAuthorizationRepository;
+import com.silver.authorization.AuthorizationProtocolCodec;
+import com.silver.authorization.AuthorizationSubject;
+import com.silver.authorization.AuthorizationSyncRequest;
+import com.silver.authorization.PermissionNode;
+import com.silver.authorization.PermissionNodes;
+import com.silver.authorization.ServerId;
 import com.silver.wakeup.config.LobbyConfig;
 import com.silver.wakeup.config.LobbyConfigLoader;
 import com.silver.wakeup.portal.PortalCommandHandler;
@@ -17,7 +28,6 @@ import com.silver.wakeup.state.PortalTransfer;
 import com.silver.wakeup.state.RoutingStateService;
 import com.silver.wakeup.config.ReturnSpecial;
 import com.velocitypowered.api.event.Subscribe;
-import com.velocitypowered.api.event.command.CommandExecuteEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
@@ -43,9 +53,10 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -73,25 +84,28 @@ import java.util.stream.Collectors;
  */
 @Plugin(id = "wakeuplobby", name = "WakeUpLobby", version = "1.3.0")
 public class VelocityPlugin {
-    private static final String SERVER_PERMISSION = "wakeuplobby.server";
-    private static final String BIG_VIP_PERMISSION = "wakeuplobby.queue.bigvip";
-    private static final String VIP_PERMISSION = "wakeuplobby.queue.vip";
+    private static final PermissionNode SERVER_PERMISSION = PermissionNodes.WAKEUPLOBBY_SERVER;
+    private static final PermissionNode BIG_VIP_PERMISSION = PermissionNodes.WAKEUPLOBBY_QUEUE_BIGVIP;
+    private static final PermissionNode VIP_PERMISSION = PermissionNodes.WAKEUPLOBBY_QUEUE_VIP;
     private static final String ADMISSION_STATUS_URL = "http://primary-ram.local:25580/status";
 
     static final String MPDS_REMOVE_SELF_COMMAND = "mpdsremovecustomidself";
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDir;
+    private final CommandCatalogStore commandCatalogStore;
 
     // config/runtime
     private LobbyConfigLoader configLoader;
     private RuntimeState runtime;
     private RoutingStateService routingState;
+    private AuthorizationService authorizationService;
+    private AuthorizationBackendKeys authorizationBackendKeys;
+    private CommandCatalogReceiver commandCatalogReceiver;
     private PortalHandoffService portalHandoffService;
     private PortalCommandHandler portalCommandHandler;
     private PortalTokenVerifier portalTokenVerifier;
     private PortalRequestVerifier portalRequestVerifier;
-    private VelocityOpsStore velocityOpsStore;
     private WhitelistStore whitelistStore;
     private CommandRegistrar commandRegistrar;
     private SecurityManager securityManager;
@@ -114,6 +128,12 @@ public class VelocityPlugin {
 
     private static final MinecraftChannelIdentifier RETURN_OVERWORLD_CHANNEL =
         MinecraftChannelIdentifier.from("wakeuplobby:return_overworld");
+
+    private static final MinecraftChannelIdentifier AUTHORIZATION_SYNC_CHANNEL =
+            MinecraftChannelIdentifier.from("silverauth:sync_v1");
+
+    private static final MinecraftChannelIdentifier COMMAND_CATALOG_CHANNEL =
+            MinecraftChannelIdentifier.from("silverauth:command_catalog_v1");
 
     record ReturnRemoveResponse(boolean success,
                                 int removedInventory,
@@ -238,6 +258,7 @@ public class VelocityPlugin {
         this.proxy = proxy;
         this.logger = logger;
         this.dataDir = dataDir;
+        this.commandCatalogStore = new CommandCatalogStore(logger);
     }
 
     @Subscribe
@@ -247,15 +268,55 @@ public class VelocityPlugin {
             proxy.getChannelRegistrar().register(PORTAL_REQUEST_CHANNEL);
             proxy.getChannelRegistrar().register(MPDS_RETURN_REMOVE_CHANNEL);
             proxy.getChannelRegistrar().register(RETURN_OVERWORLD_CHANNEL);
+            proxy.getChannelRegistrar().register(AUTHORIZATION_SYNC_CHANNEL);
+            proxy.getChannelRegistrar().register(COMMAND_CATALOG_CHANNEL);
 
             configLoader = new LobbyConfigLoader(logger, dataDir);
             configLoader.ensureDefaultConfig();
             portalTokenVerifier = new PortalTokenVerifier(logger);
             routingState = RoutingStateService.initialize(logger);
+            Set<ServerId> configuredAuthorizationServers = configuredAuthorizationServers();
+            authorizationService = new AuthorizationService(
+                    new MariaDbAuthorizationRepository(routingState.dataSource()), logger, java.time.Clock.systemUTC());
+            try {
+                authorizationService.initialize(configuredAuthorizationServers);
+            } catch (Exception authorizationFailure) {
+                logger.error("[Authorization] Cold start has no usable central state; centralized decisions fail closed",
+                        authorizationFailure);
+            }
+            try {
+                authorizationBackendKeys = AuthorizationBackendKeys.load(dataDir,
+                        configuredAuthorizationServers, logger);
+            } catch (IOException keyConfigFailure) {
+                logger.error("[Authorization] Could not load backend keys; authenticated snapshot sync is disabled",
+                        keyConfigFailure);
+            }
+            if (authorizationBackendKeys != null) {
+                try {
+                    commandCatalogReceiver = CommandCatalogReceiver.start(dataDir, authorizationBackendKeys,
+                            authorizationService, commandCatalogStore, logger);
+                } catch (IOException catalogListenerFailure) {
+                    logger.error("[CommandPolicy] Could not start authenticated startup catalog listener; "
+                            + "backend command inventories will remain unavailable", catalogListenerFailure);
+                }
+            }
+            proxy.getScheduler().buildTask(this, () -> {
+                if (authorizationService == null) return;
+                if (authorizationService.hasUsableState()) {
+                    authorizationService.refreshDatabaseHealth();
+                } else {
+                    authorizationService.refreshDatabaseHealth();
+                    if (authorizationService.databaseAvailable()) {
+                        try { authorizationService.initialize(configuredAuthorizationServers); }
+                        catch (Exception retryFailure) {
+                            logger.warn("[Authorization] Central authority remains unavailable on cold-start retry: {}",
+                                    retryFailure.toString());
+                        }
+                    }
+                }
+            }).repeat(Duration.ofSeconds(10)).schedule();
             portalHandoffService = new PortalHandoffService(routingState, logger);
             portalRequestVerifier = new PortalRequestVerifier(logger);
-            velocityOpsStore = new VelocityOpsStore(dataDir, logger);
-            velocityOpsStore.ensureFileAndLoad();
             whitelistStore = new WhitelistStore(dataDir, logger);
             whitelistStore.ensureFileAndLoad();
             securityManager = new SecurityManager(logger, whitelistStore);
@@ -302,6 +363,14 @@ public class VelocityPlugin {
 
     @Subscribe
     public void onPluginMessage(PluginMessageEvent event) {
+        if (event.getIdentifier().equals(AUTHORIZATION_SYNC_CHANNEL)) {
+            handleAuthorizationSyncMessage(event);
+            return;
+        }
+        if (event.getIdentifier().equals(COMMAND_CATALOG_CHANNEL)) {
+            handleCommandCatalogMessage(event);
+            return;
+        }
         if (event.getIdentifier().equals(PORTAL_REQUEST_CHANNEL)) {
             handlePortalRequestMessage(event);
             return;
@@ -337,6 +406,76 @@ public class VelocityPlugin {
             event.setResult(PluginMessageEvent.ForwardResult.handled());
         } catch (Throwable ignored) {
             // Older Velocity API variants may not expose ForwardResult; safe to ignore.
+        }
+    }
+
+    private Set<ServerId> configuredAuthorizationServers() {
+        Set<ServerId> configured = new HashSet<>();
+        proxy.getAllServers().forEach(server -> configured.add(ServerId.of(server.getServerInfo().getName())));
+        Set<ServerId> expected = Set.of("waiting_lobby", "vanilla1", "sky-island", "ocean", "desert", "cave", "magic")
+                .stream().map(ServerId::of).collect(Collectors.toUnmodifiableSet());
+        Set<ServerId> missing = new HashSet<>(expected);
+        missing.removeAll(configured);
+        if (!missing.isEmpty()) logger.warn("[Authorization] Expected canonical server IDs not present in Velocity config: {}", missing);
+        return Set.copyOf(configured);
+    }
+
+    private void handleAuthorizationSyncMessage(PluginMessageEvent event) {
+        try {
+            if (!(event.getSource() instanceof ServerConnection backend)
+                    || !(event.getTarget() instanceof Player player)
+                    || authorizationService == null || authorizationBackendKeys == null) {
+                return;
+            }
+            ServerId trustedServer = ServerId.of(backend.getServerInfo().getName());
+            if (!player.getCurrentServer().map(connection ->
+                    connection.getServerInfo().getName().equalsIgnoreCase(trustedServer.value())).orElse(false)) {
+                return;
+            }
+            byte[] frame = event.getData();
+            AuthorizationSyncRequest request = AuthorizationProtocolCodec.decodeRequest(frame);
+            if (!request.backendId().equals(trustedServer.value())
+                    || !request.serverId().equals(trustedServer)
+                    || !request.subject().playerUuid().equals(player.getUniqueId())
+                    || !authorizationService.currentState().enabledServers().contains(trustedServer)) {
+                return;
+            }
+            byte[] key = authorizationBackendKeys.key(trustedServer).orElse(null);
+            if (key == null || !authorizationService.verifySyncRequest(request, key)) {
+                logger.debug("[Authorization] Rejected unauthenticated/replayed sync request from {}", trustedServer);
+                return;
+            }
+            var signedSnapshot = authorizationService.signedSnapshot(player.getUniqueId(), trustedServer,
+                    request.backendEpoch(), request.nonce(), Instant.now(), Duration.ofMinutes(2), key);
+            if (signedSnapshot.isEmpty()) return;
+            boolean sent = backend.sendPluginMessage(AUTHORIZATION_SYNC_CHANNEL,
+                    AuthorizationProtocolCodec.encodeSnapshot(signedSnapshot.orElseThrow()));
+            if (!sent) logger.debug("[Authorization] Snapshot send failed for {} on {}", player.getUniqueId(), trustedServer);
+        } catch (RuntimeException failure) {
+            logger.warn("[Authorization] Rejected malformed sync message: {}", failure.toString());
+        } finally {
+            try { event.setResult(PluginMessageEvent.ForwardResult.handled()); }
+            catch (Throwable ignored) { }
+        }
+    }
+
+    private void handleCommandCatalogMessage(PluginMessageEvent event) {
+        try {
+            if (!(event.getSource() instanceof ServerConnection backend)
+                    || !(event.getTarget() instanceof Player player)
+                    || authorizationService == null || authorizationBackendKeys == null) return;
+            ServerId trustedServer = ServerId.of(backend.getServerInfo().getName());
+            if (!player.getCurrentServer().map(connection ->
+                    connection.getServerInfo().getName().equalsIgnoreCase(trustedServer.value())).orElse(false)
+                    || !authorizationService.currentState().enabledServers().contains(trustedServer)) return;
+            byte[] key = authorizationBackendKeys.key(trustedServer).orElse(null);
+            if (key == null) return;
+            commandCatalogStore.accept(event.getData(), trustedServer, key, Instant.now());
+        } catch (RuntimeException failure) {
+            logger.warn("[CommandPolicy] Could not process backend command catalog: {}", failure.toString());
+        } finally {
+            try { event.setResult(PluginMessageEvent.ForwardResult.handled()); }
+            catch (Throwable ignored) { }
         }
     }
 
@@ -707,50 +846,6 @@ public class VelocityPlugin {
         logger.info("[WakeUpLobby] onPreConnect: {} manual request '{}'", player.getUsername(), requested);
     }
 
-    @Subscribe
-    public void onCommandExecute(CommandExecuteEvent event) {
-        if (!(event.getCommandSource() instanceof Player player)) {
-            return;
-        }
-
-        if (runtime == null || hasBypass(player)) {
-            return;
-        }
-
-        String rawCommand = event.getCommand();
-        if (rawCommand == null) {
-            return;
-        }
-
-        String commandBody = rawCommand.trim();
-        if (commandBody.isEmpty()) {
-            return;
-        }
-
-        if (commandBody.startsWith("/")) {
-            commandBody = commandBody.substring(1).trim();
-        }
-
-        String lowerCommand = commandBody.toLowerCase(Locale.ROOT);
-        String[] parts = lowerCommand.split("\\s+");
-        if (parts.length == 0) {
-            return;
-        }
-
-        boolean allowedBasic = parts[0].equals("w")
-                || parts[0].equals("msg")
-            || parts[0].equals("teammsg")
-            || parts[0].equals("return")
-            || ((parts[0].equals("server") || parts[0].equals("connect")) && player.hasPermission(SERVER_PERMISSION));
-        if (allowedBasic) {
-            return;
-        }
-
-        player.sendMessage(Component.text("⚠ Commands are restricted."));
-        event.setResult(CommandExecuteEvent.CommandResult.denied());
-    }
-
-
     /** Record visits; never record holding in visited or as last. */
     @Subscribe
     public void onConnected(ServerConnectedEvent e) {
@@ -759,6 +854,12 @@ public class VelocityPlugin {
         var srv = e.getServer().getServerInfo().getName();
 
         logger.info("[WakeUpLobby] onConnected: player={} server={}", p.getUsername(), srv);
+        if (authorizationService != null) {
+            UUID knownUuid = playerId;
+            String knownUsername = p.getUsername();
+            proxy.getScheduler().buildTask(this,
+                    () -> authorizationService.rememberUsername(knownUuid, knownUsername)).schedule();
+        }
 
         if (!srv.equalsIgnoreCase(runtime.holdingServer())) {
             // Successful entry into a backend means this player is no longer admission-waiting.
@@ -829,6 +930,8 @@ public class VelocityPlugin {
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
+        if (commandCatalogReceiver != null) commandCatalogReceiver.close();
+        if (authorizationService != null) authorizationService.close();
         if (routingState != null) {
             routingState.close();
         }
@@ -870,10 +973,10 @@ public class VelocityPlugin {
         if (hasBypass(player)) {
             return AdmissionQueue.Tier.ADMIN;
         }
-        if (player.hasPermission(BIG_VIP_PERMISSION)) {
+        if (hasAuthorizationPermission(player, BIG_VIP_PERMISSION)) {
             return AdmissionQueue.Tier.BIG_VIP;
         }
-        if (player.hasPermission(VIP_PERMISSION)) {
+        if (hasAuthorizationPermission(player, VIP_PERMISSION)) {
             return AdmissionQueue.Tier.VIP;
         }
         return AdmissionQueue.Tier.NORMAL;
@@ -1052,26 +1155,24 @@ public class VelocityPlugin {
     /* =================== Helpers & config =================== */
 
     private boolean hasBypass(Player p) {
-        return p.hasPermission(SERVER_PERMISSION) || isVelocityOp(p.getUsername());
+        return hasAuthorizationPermission(p, SERVER_PERMISSION);
     }
 
-    boolean isVelocityOp(String username) {
-        return velocityOpsStore != null && velocityOpsStore.isVelocityOp(username);
+    boolean hasAuthorizationPermission(Player player, PermissionNode permission) {
+        if (authorizationService == null || player == null) return false;
+        Optional<ServerId> currentServer = player.getCurrentServer()
+                .map(connection -> connection.getServerInfo().getName())
+                .map(name -> {
+                    try { return ServerId.of(name); } catch (IllegalArgumentException ignored) { return null; }
+                });
+        return currentServer.filter(server -> authorizationService.currentState().enabledServers().contains(server))
+                .map(server -> authorizationService.has(AuthorizationSubject.player(player.getUniqueId()), permission, server))
+                .orElse(false);
     }
 
-    boolean addVelocityOp(String username) throws IOException {
-        if (velocityOpsStore == null) {
-            return false;
-        }
-        return velocityOpsStore.add(username);
-    }
+    AuthorizationService authorizationService() { return authorizationService; }
 
-    boolean removeVelocityOp(String username) throws IOException {
-        if (velocityOpsStore == null) {
-            return false;
-        }
-        return velocityOpsStore.remove(username);
-    }
+    CommandCatalogStore commandCatalogStore() { return commandCatalogStore; }
 
     List<UUID> listWhitelist() {
         if (whitelistStore == null) {
@@ -1099,13 +1200,6 @@ public class VelocityPlugin {
             return false;
         }
         return whitelistStore.remove(uuid);
-    }
-
-    List<String> listVelocityOps() {
-        if (velocityOpsStore == null) {
-            return List.of();
-        }
-        return velocityOpsStore.list();
     }
 
     private Optional<String> preferredFor(UUID uuid) {
@@ -1158,9 +1252,6 @@ public class VelocityPlugin {
     }
 
     void reloadConfig() throws IOException {
-        if (velocityOpsStore != null) {
-            velocityOpsStore.reload();
-        }
         loadConfig();
     }
 

@@ -1,1 +1,3 @@
 rootProject.name = "wake-up-lobby"
+
+includeBuild('../MC-Mods/Util-Mods/Authorization-Common')

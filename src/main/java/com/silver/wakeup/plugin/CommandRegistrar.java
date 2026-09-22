@@ -2,11 +2,13 @@ package com.silver.wakeup.plugin;
 
 import com.silver.wakeup.portal.PortalCommandHandler;
 import com.silver.wakeup.config.ReturnSpecial;
+import com.silver.authorization.PermissionNodes;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.ConsoleCommandSource;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
@@ -20,8 +22,7 @@ import java.util.UUID;
  * Centralises registration and handling for all WakeUpLobby commands.
  */
 public class CommandRegistrar {
-    private static final String SERVER_PERMISSION = "wakeuplobby.server";
-    private static final String WAKEUPLOBBY_USAGE = "§7Usage: /wakeuplobby reload | /wakeuplobby ops <list|add|remove> [player] | /wakeuplobby whitelist <list|add|remove> [player]";
+    private static final String WAKEUPLOBBY_USAGE = "§7Usage: /wakeuplobby reload | /wakeuplobby whitelist <list|add|remove> [player]";
 
     private final ProxyServer proxy;
     private final RuntimeState runtime;
@@ -50,13 +51,19 @@ public class CommandRegistrar {
             return;
         }
         registerReloadCommand();
+        if (plugin.authorizationService() != null) {
+            proxy.getCommandManager().register("auth", new AuthorizationCommand(
+                    proxy, plugin, plugin.authorizationService(), uuidResolver, logger));
+        } else {
+            logger.error("[Authorization] /auth not registered because the authorization service could not initialize");
+        }
         registerPortalCommand();
         registerMessageCommands();
         registerServerOverride();
         registerForceServerCommand();
         registerReturnCommand();
         registered = true;
-        logger.info("[WakeUpLobby] Commands registered: /wakeuplobby reload, /wakeuplobby ops, /wl portal, /server (override), /forceserver, /return");
+        logger.info("[WakeUpLobby] Commands registered: /auth, /wakeuplobby reload, /wakeuplobby whitelist, /wl portal, /server (override), /forceserver, /return");
     }
 
     private void registerReloadCommand() {
@@ -103,65 +110,18 @@ public class CommandRegistrar {
 
                 @Override
                 public boolean hasPermission(Invocation invocation) {
-                    return canManageWakeupLobby(invocation.source());
+                    return canManageWakeupLobby(invocation.source()) || canManageAdmission(invocation.source());
                 }
             }
         );
     }
 
     private void handleOpsCommand(CommandSource source, String[] args) {
-        if (!canManageWakeupLobby(source)) {
-            source.sendMessage(Component.text("§cYou do not have permission to use this command."));
-            return;
-        }
-
-        if (args.length < 2) {
-            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops <list|add|remove> [player]"));
-            return;
-        }
-
-        if (args[1].equalsIgnoreCase("list")) {
-            var ops = plugin.listVelocityOps();
-            if (ops.isEmpty()) {
-                source.sendMessage(Component.text("§eVelocity ops list is empty."));
-            } else {
-                source.sendMessage(Component.text("§aVelocity ops: §f" + String.join(", ", ops)));
-            }
-            return;
-        }
-
-        if (args.length < 3) {
-            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops " + args[1].toLowerCase() + " <player>"));
-            return;
-        }
-
-        String target = args[2];
-        try {
-            if (args[1].equalsIgnoreCase("add")) {
-                boolean changed = plugin.addVelocityOp(target);
-                source.sendMessage(Component.text(changed
-                        ? "§aAdded velocity op: §f" + target
-                        : "§ePlayer is already a velocity op: §f" + target));
-                return;
-            }
-
-            if (args[1].equalsIgnoreCase("remove")) {
-                boolean changed = plugin.removeVelocityOp(target);
-                source.sendMessage(Component.text(changed
-                        ? "§aRemoved velocity op: §f" + target
-                        : "§ePlayer is not in velocity ops: §f" + target));
-                return;
-            }
-
-            source.sendMessage(Component.text("§7Usage: /wakeuplobby ops <list|add|remove> [player]"));
-        } catch (IOException e) {
-            logger.error("Failed to update velocity ops list", e);
-            source.sendMessage(Component.text("§cFailed updating velocity ops list: " + e.getMessage()));
-        }
+        source.sendMessage(Component.text("Legacy Velocity operator management is retired. Use /auth user <player|uuid> role add|remove <role>."));
     }
 
     private void handleWhitelistCommand(CommandSource source, String[] args) {
-        if (!canManageWakeupLobby(source)) {
+        if (!canManageAdmission(source)) {
             source.sendMessage(Component.text("§cYou do not have permission to use this command."));
             return;
         }
@@ -244,10 +204,21 @@ public class CommandRegistrar {
     }
 
     private boolean canManageWakeupLobby(CommandSource source) {
-        if (!(source instanceof Player player)) {
-            return true;
-        }
-        return plugin.isVelocityOp(player.getUsername());
+        if (source instanceof ConsoleCommandSource) return true;
+        return source instanceof Player player
+                && plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_MANAGE);
+    }
+
+    private boolean canManageAdmission(CommandSource source) {
+        if (source instanceof ConsoleCommandSource) return true;
+        return source instanceof Player player
+                && plugin.hasAuthorizationPermission(player, PermissionNodes.ADMISSION_MANAGE);
+    }
+
+    private boolean canForceServer(CommandSource source) {
+        if (source instanceof ConsoleCommandSource) return true;
+        return source instanceof Player player
+                && plugin.hasAuthorizationPermission(player, PermissionNodes.SERVER_SWITCH_FORCE);
     }
 
     private void registerPortalCommand() {
@@ -295,11 +266,17 @@ public class CommandRegistrar {
 
     private void registerMessageCommands() {
     proxy.getCommandManager().register("w",
-        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:msg", "w", true));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass,
+                player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
+                "minecraft:msg", "w", true));
     proxy.getCommandManager().register("msg",
-        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:msg", "msg", true));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass,
+                player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
+                "minecraft:msg", "msg", true));
     proxy.getCommandManager().register("teammsg",
-        new SanitizedForwardCommand(proxy, logger, this::hasBypass, "minecraft:teammsg", "teammsg", false));
+        new SanitizedForwardCommand(proxy, logger, this::hasBypass,
+                player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
+                "minecraft:teammsg", "teammsg", false));
     }
 
     private void registerServerOverride() {
@@ -342,10 +319,7 @@ public class CommandRegistrar {
 
                     @Override
                     public boolean hasPermission(Invocation invocation) {
-                        if (!(invocation.source() instanceof Player player)) {
-                            return true;
-                        }
-                        return hasBypass(player);
+                        return invocation.source() instanceof Player player && hasBypass(player);
                     }
                 }
         );
@@ -358,7 +332,7 @@ public class CommandRegistrar {
                     @Override
                     public void execute(Invocation invocation) {
                         CommandSource source = invocation.source();
-                        if (!canManageWakeupLobby(source)) {
+                        if (!canForceServer(source)) {
                             source.sendMessage(Component.text("§cYou do not have permission to use this command."));
                             return;
                         }
@@ -397,7 +371,7 @@ public class CommandRegistrar {
 
                     @Override
                     public boolean hasPermission(Invocation invocation) {
-                        return canManageWakeupLobby(invocation.source());
+                        return canForceServer(invocation.source());
                     }
 
                     @Override
@@ -531,6 +505,6 @@ public class CommandRegistrar {
     }
 
     private boolean hasBypass(Player player) {
-        return player.hasPermission(SERVER_PERMISSION) || plugin.isVelocityOp(player.getUsername());
+        return plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SERVER);
     }
 }

@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import javax.sql.DataSource;
 
 /** Transactional MariaDB persistence for routing profiles and portal transfers. */
 public final class MariaDbRoutingRepository implements AutoCloseable {
@@ -42,27 +43,22 @@ public final class MariaDbRoutingRepository implements AutoCloseable {
     }
 
     public void migrate() throws SQLException, IOException {
-        String sql;
-        try (InputStream input = MariaDbRoutingRepository.class.getResourceAsStream(
-                "/db/migration/V001__create_wakeup_routing.sql")) {
-            if (input == null) throw new IOException("Missing routing migration resource");
-            sql = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
+        String routingSql = readMigration("/db/migration/V001__create_wakeup_routing.sql");
+        String authorizationSql = readMigration("/db/migration/V002__create_authorization.sql");
+        String authorizationSeedSql = readMigration("/db/migration/V003__seed_initial_authorization.sql");
+        String defaultPlayerRolesSql = readMigration("/db/migration/V004__data_driven_default_player_roles.sql");
+        String firstPartyPolicySql = readMigration("/db/migration/V005__seed_first_party_authorization_policy.sql");
+        String commandPolicySql = readMigration("/db/migration/V006__seed_central_command_policy.sql");
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                for (String statement : sql.split(";")) {
-                    if (!statement.isBlank()) {
-                        try (Statement query = connection.createStatement()) {
-                            query.execute(statement);
-                        }
-                    }
-                }
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT IGNORE INTO wakeup_schema_migrations(version, description) VALUES (1, ?)") ) {
-                    insert.setString(1, "create WakeUpLobby routing state");
-                    insert.executeUpdate();
-                }
+                ensureMigrationTable(connection);
+                applyMigration(connection, 1, "create WakeUpLobby routing state", routingSql);
+                applyMigration(connection, 2, "create centralized authorization schema", authorizationSql);
+                applyMigration(connection, 3, "seed initial centralized authorization", authorizationSeedSql);
+                applyMigration(connection, 4, "configure data-driven default player roles", defaultPlayerRolesSql);
+                applyMigration(connection, 5, "seed first-party centralized authorization policy", firstPartyPolicySql);
+                applyMigration(connection, 6, "seed centralized command administration policy", commandPolicySql);
                 connection.commit();
             } catch (SQLException failure) {
                 connection.rollback();
@@ -70,6 +66,52 @@ public final class MariaDbRoutingRepository implements AutoCloseable {
             } finally {
                 connection.setAutoCommit(true);
             }
+        }
+    }
+
+    /** Shared pool for plugin-owned repositories; its lifecycle remains owned here. */
+    public DataSource dataSource() {
+        return dataSource;
+    }
+
+    private static String readMigration(String resource) throws IOException {
+        try (InputStream input = MariaDbRoutingRepository.class.getResourceAsStream(resource)) {
+            if (input == null) throw new IOException("Missing migration resource: " + resource);
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static void applyMigration(Connection connection, int version, String description, String sql)
+            throws SQLException {
+        try (PreparedStatement lookup = connection.prepareStatement(
+                "SELECT 1 FROM wakeup_schema_migrations WHERE version=?")) {
+            lookup.setInt(1, version);
+            try (ResultSet rows = lookup.executeQuery()) {
+                if (rows.next()) return;
+            }
+        }
+        for (String statement : sql.split(";")) {
+            if (!statement.isBlank()) {
+                try (Statement query = connection.createStatement()) {
+                    query.execute(statement);
+                }
+            }
+        }
+        try (PreparedStatement insert = connection.prepareStatement(
+                "INSERT IGNORE INTO wakeup_schema_migrations(version, description) VALUES (?, ?)")) {
+            insert.setInt(1, version);
+            insert.setString(2, description);
+            insert.executeUpdate();
+        }
+    }
+
+    private static void ensureMigrationTable(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE IF NOT EXISTS wakeup_schema_migrations ("
+                    + "version INT NOT NULL PRIMARY KEY, "
+                    + "description VARCHAR(255) NOT NULL, "
+                    + "applied_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)"
+                    + ") ENGINE=InnoDB");
         }
     }
 
