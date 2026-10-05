@@ -265,18 +265,13 @@ public class CommandRegistrar {
     }
 
     private void registerMessageCommands() {
-    proxy.getCommandManager().register("w",
-        new SanitizedForwardCommand(proxy, logger, this::hasBypass,
-                player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
-                "minecraft:msg", "w", true));
+    // Keep /msg as the sole public private-message entry point. /w and /teammsg
+    // remain vanilla backend commands, where the centralized command policy gates
+    // them for PLAYER users without removing the commands from Minecraft.
     proxy.getCommandManager().register("msg",
         new SanitizedForwardCommand(proxy, logger, this::hasBypass,
                 player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
                 "minecraft:msg", "msg", true));
-    proxy.getCommandManager().register("teammsg",
-        new SanitizedForwardCommand(proxy, logger, this::hasBypass,
-                player -> plugin.hasAuthorizationPermission(player, PermissionNodes.WAKEUPLOBBY_SELECTORS),
-                "minecraft:teammsg", "teammsg", false));
     }
 
     private void registerServerOverride() {

@@ -145,9 +145,10 @@ Example:
 Usernames are matched case-insensitively. Editing this file manually takes effect after `/wakeuplobby reload`.
 
 **Allowed for Non-Ops:**
-- `/w <player> <message>` - Send a direct message
 - `/msg <player> <message>` - Send a direct message
-- `/teammsg <message>` - Send a team message
+
+Vanilla `/tell`, `/w`, `/me`, `/teammsg`/`/tm`, and `/random` are centrally
+restricted to command administrators on the Fabric backends. `/msg` remains public.
 
 ### Portal Handoff
 
