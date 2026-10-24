@@ -93,6 +93,19 @@ public class RuntimeState {
             holdingServer, graceSec, pingEverySec);
     }
 
+    /** Sends the Wake-on-LAN packet for the machine that runs this server, if it has a MAC address configured. */
+    void wakeHost(String server) {
+        String mac = serverToMac.get(server);
+        if (mac == null || mac.isBlank() || wakeService == null) {
+            return;
+        }
+        try {
+            wakeService.wake(mac);
+        } catch (Exception failure) {
+            logger.warn("[OnDemand] Wake-on-LAN for '{}' failed: {}", server, failure.toString());
+        }
+    }
+
     StickyRouter stickyRouter() {
         return Objects.requireNonNull(stickyRouter, "StickyRouter not initialised");
     }

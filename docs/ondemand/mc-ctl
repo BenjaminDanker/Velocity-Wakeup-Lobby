@@ -1,0 +1,51 @@
+#!/bin/bash
+# mc-ctl start|stop|status <server>
+# Starts and stops the Minecraft servers (user systemd units). It is also the forced command of the Raspberry Pi's key
+# (~/.ssh/authorized_keys), so the proxy can only ever do these three things to the servers that run on this host.
+# The server list is this host's copy of the network registry (~/.config/mc-network/cache.json, kept by mc-net).
+set -u
+set -f
+declare -A UNIT=()
+host=$(hostname)
+while read -r server; do
+  [[ $server =~ ^[a-z0-9_-]+$ ]] && UNIT[$server]="$server-mc-server"
+done < <(python3 -c '
+import json, sys, os
+registry = json.load(open(os.path.expanduser("~/.config/mc-network/cache.json")))
+for s in registry["servers"]:
+    if s["location"] == sys.argv[1]:
+        print(s["name"])' "$host" 2>/dev/null)
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  set -- $SSH_ORIGINAL_COMMAND
+fi
+action=${1:-}
+name=${2:-}
+unit=${UNIT[$name]:-}
+if [ -z "$unit" ] || [ $# -ne 2 ]; then
+  echo "usage: mc-ctl start|stop|status <${!UNIT[*]}>" >&2
+  exit 2
+fi
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+case "$action" in
+  start)
+    # no-block: the server takes a while to come up and the caller only needs to know the request was accepted
+    systemctl --user start --no-block "$unit" && echo "start requested: $name"
+    ;;
+  stop)
+    # A mod running a long job (Atlantis builds and undoes) keeps <server>/.busy fresh; don't stop it mid-job.
+    # A marker older than two minutes is left over from a crash and ignored. Exit 75 = busy, try again later.
+    marker="$HOME/mc-servers/$name/.busy"
+    if [ -f "$marker" ] && [ $(( $(date +%s) - $(stat -c %Y "$marker") )) -lt 120 ]; then
+      echo "busy: $name has a job running; stop postponed"
+      exit 75
+    fi
+    systemctl --user stop --no-block "$unit" && echo "stop requested: $name"
+    ;;
+  status)
+    echo "$name $(systemctl --user is-active "$unit")"
+    ;;
+  *)
+    echo "unknown action '$action'" >&2
+    exit 2
+    ;;
+esac

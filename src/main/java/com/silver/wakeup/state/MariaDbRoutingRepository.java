@@ -251,6 +251,40 @@ public final class MariaDbRoutingRepository implements AutoCloseable {
         }
     }
 
+    /** The servers this player is recorded as having visited, read straight from the database. */
+    public Set<String> loadVisits(UUID playerId) throws SQLException {
+        Set<String> servers = new HashSet<>();
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT server_name FROM wakeup_player_visits WHERE player_uuid = ?")) {
+            statement.setString(1, playerId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) servers.add(rows.getString(1));
+            }
+        }
+        return servers;
+    }
+
+    /**
+     * Which story branches the player has finished, from MPDS's player table ("magic", "tech"). A missing table or
+     * columns (a database MPDS has not migrated yet) reads as nothing finished.
+     */
+    public Set<String> loadCompletedBranches(UUID playerId) throws SQLException {
+        Set<String> done = new HashSet<>();
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT MagicCompleted, TechCompleted FROM player WHERE uuid = ?")) {
+            statement.setString(1, playerId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    if (rows.getBoolean(1)) done.add("magic");
+                    if (rows.getBoolean(2)) done.add("tech");
+                }
+            }
+        }
+        return done;
+    }
+
     public void setPreferredServer(UUID playerId, String server) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(

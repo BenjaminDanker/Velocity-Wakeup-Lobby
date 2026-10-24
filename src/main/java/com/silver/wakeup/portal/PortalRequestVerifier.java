@@ -11,7 +11,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static com.silver.wakeup.portal.PortalRequestPayloadCodec.PortalRequest;
+import com.silver.authorization.PortalRequestCodec;
+import com.silver.authorization.PortalRequestCodec.PortalRequest;
 
 /**
  * Verifies backend->proxy portal requests.
@@ -81,7 +82,7 @@ public final class PortalRequestVerifier {
             return false;
         }
 
-        byte[] expected = hmacSha256(secret, PortalRequestPayloadCodec.encodeUnsigned(request.unsigned()));
+        byte[] expected = hmacSha256(secret, PortalRequestCodec.encodeUnsigned(request.unsigned()));
         boolean match = constantTimeEquals(expected, request.signature());
         if (!match) {
             log.warn("[WakeUpLobby] Portal request rejected: bad signature backend='{}' target='{}'", backendServerName, request.targetServer());

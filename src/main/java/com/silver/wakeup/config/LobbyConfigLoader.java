@@ -55,16 +55,16 @@ portal_secrets:
 
 # Backend -> proxy portal request authentication.
 # Each backend server that can initiate a portal transfer MUST have a shared secret here.
-# Key: the Velocity server name (e.g. "vanilla1"). Value: a long random string.
+# Key: the Velocity server name (e.g. "vanilla"). Value: a long random string.
 # You can also use a wildcard entry "*" to apply the same secret to all backends.
 backend_portal_request_secrets:
     "*": ""
 servers:
-    vanilla1: "mac_address"
+    vanilla: "mac_address"
 groups:
-    default_group: ["vanilla1"]
+    default_group: ["vanilla"]
 # Servers players can return to after grace expires (in order)
-return_servers: ["vanilla1", "magic"]
+return_servers: ["vanilla", "magic"]
 # Specials removed when using /return (by origin server)
 return_specials:
     ocean:
@@ -118,7 +118,7 @@ return_specials:
 
         Map<String, String> backendPortalRequestSecrets = parsePerPortalSecrets(root.get("backend_portal_request_secrets"));
 
-        List<String> returnServers = parseStringList(root.get("return_servers"), List.of("vanilla1", "magic"));
+        List<String> returnServers = parseStringList(root.get("return_servers"), List.of("vanilla", "magic"));
         Map<String, List<ReturnSpecial>> returnSpecials = parseReturnSpecials(root.get("return_specials"));
 
         return new LobbyConfig(
@@ -132,8 +132,27 @@ return_specials:
                 perPortalSecrets,
             backendPortalRequestSecrets,
                 returnServers,
-                returnSpecials
+                returnSpecials,
+                parseOnDemand(root.get("on_demand"))
         );
+    }
+
+    /** on_demand: {enabled, ssh_target, ssh_key, idle_minutes, servers: [..], keep_running: [..]}; missing or malformed means off. */
+    public static OnDemandSettings parseOnDemand(Object value) {
+        Map<String, Object> map = asMap(value);
+        if (map == null) {
+            return OnDemandSettings.DISABLED;
+        }
+        boolean enabled = Boolean.parseBoolean(Objects.toString(map.get("enabled"), "false"));
+        String target = stringOrDefault(map.get("ssh_target"), "").trim();
+        String key = stringOrDefault(map.get("ssh_key"), "").trim();
+        long idle = map.get("idle_minutes") == null ? 10 : Math.max(1, asLong(map.get("idle_minutes")));
+        List<String> servers = parseStringList(map.get("servers"), List.of());
+        if (enabled && (target.isEmpty() || key.isEmpty() || servers.isEmpty())) {
+            return OnDemandSettings.DISABLED;
+        }
+        return new OnDemandSettings(enabled, target, key, idle, new java.util.HashSet<>(servers),
+            new java.util.HashSet<>(parseStringList(map.get("keep_running"), List.of())));
     }
 
     private static List<String> parseStringList(Object value, List<String> defaultValue) {

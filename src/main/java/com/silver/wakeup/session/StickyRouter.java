@@ -86,21 +86,21 @@ public class StickyRouter {
 
     /** Mark next PreConnect for this player as plugin-internal (skip manual checks). */
     public void markInternalOnce(UUID who) {
-        log.info("[StickyRouter] markInternalOnce: player={}", who);
+        log.debug("[StickyRouter] markInternalOnce: player={}", who);
         internalOnce.add(who);
     }
 
     /** Consume the internal mark; returns true if we should bypass checks. */
     public boolean consumeInternalOnce(UUID who) {
         boolean wasInternal = internalOnce.remove(who);
-        log.info("[StickyRouter] consumeInternalOnce: player={} wasInternal={}", who, wasInternal);
+        log.debug("[StickyRouter] consumeInternalOnce: player={} wasInternal={}", who, wasInternal);
         return wasInternal;
     }
 
     /** Check if there's an active sticky state for this player. */
     public boolean hasStickyState(UUID who) {
         boolean hasState = sessionManager.hasStickyState(who);
-        log.info("[StickyRouter] hasStickyState: player={} hasState={}", who, hasState);
+        log.debug("[StickyRouter] hasStickyState: player={} hasState={}", who, hasState);
         return hasState;
     }
 

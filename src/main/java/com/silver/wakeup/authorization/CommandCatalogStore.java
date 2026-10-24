@@ -56,8 +56,15 @@ public final class CommandCatalogStore {
             }
             seen.put(catalog.nonce(), catalog.issuedAt());
             catalogs.put(trustedServer, new CatalogState(catalog, now));
-            log.info("[CommandPolicy] Accepted runtime command catalog server={} paths={} generation={} epoch={}",
-                    trustedServer, catalog.entries().size(), catalog.generation(), catalog.backendEpoch());
+            // Backends resend every 30 s; only the first catalog of each backend start is worth an INFO line.
+            boolean newEpoch = previous == null || !previous.catalog().backendEpoch().equals(catalog.backendEpoch());
+            if (newEpoch) {
+                log.info("[CommandPolicy] Accepted runtime command catalog server={} paths={} generation={} epoch={}",
+                        trustedServer, catalog.entries().size(), catalog.generation(), catalog.backendEpoch());
+            } else {
+                log.debug("[CommandPolicy] Accepted runtime command catalog server={} paths={} generation={}",
+                        trustedServer, catalog.entries().size(), catalog.generation());
+            }
             Map<String, Integer> unmappedRoots = new TreeMap<>();
             for (var entry : catalog.entries()) {
                 if (POLICIES.resolve(CommandOrigin.FABRIC_BACKEND, entry.path()).isEmpty()) {

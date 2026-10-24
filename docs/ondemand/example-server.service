@@ -1,0 +1,13 @@
+[Unit]
+Description=Magic Minecraft Server (started on demand by the proxy)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/silver/mc-servers/magic
+ExecStart=/usr/bin/screen -DmS magic-mc-server /home/silver/mc-servers/magic/start.sh
+ExecStop=/home/silver/mc-servers/bin/mc-stop-wait magic-mc-server
+TimeoutStopSec=120
+# Only a crash restarts it; a normal stop (by the proxy when nobody is on, or by hand) stays stopped.
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143

@@ -92,6 +92,33 @@ public final class RoutingStateService implements AutoCloseable {
         return Set.copyOf(visitedServers.getOrDefault(playerId, Set.of()));
     }
 
+    /**
+     * Visited servers re-read from the database and kept in memory. Another process (a Babylon branch switch)
+     * can change a player's visits, so the exclusive-branch check must not trust the copy loaded at startup.
+     */
+    public Set<String> refreshVisitedServers(UUID playerId) {
+        try {
+            Set<String> fresh = repository.loadVisits(playerId);
+            Set<String> held = ConcurrentHashMap.newKeySet(fresh.size());
+            held.addAll(fresh);
+            visitedServers.put(playerId, held);
+            return Set.copyOf(fresh);
+        } catch (SQLException failure) {
+            log.warn("[RoutingState] Could not refresh visits for {}; using the in-memory copy", playerId, failure);
+            return visitedServers(playerId);
+        }
+    }
+
+    /** Finished story branches, read fresh. Fails closed: if the database cannot answer, nothing counts as finished. */
+    public Set<String> completedBranches(UUID playerId) {
+        try {
+            return repository.loadCompletedBranches(playerId);
+        } catch (SQLException failure) {
+            log.warn("[RoutingState] Could not read story completion for {}; treating as none", playerId, failure);
+            return Set.of();
+        }
+    }
+
     public Optional<PortalTransfer> pendingTransfer(UUID playerId) {
         PortalTransfer transfer = pendingTransfers.get(playerId);
         if (transfer == null) return Optional.empty();

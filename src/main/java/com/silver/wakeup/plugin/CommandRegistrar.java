@@ -249,8 +249,8 @@ public class CommandRegistrar {
                         String token = args[2];
                         String arrivalPortal = args.length > 3 ? args[3] : null;
 
-                        logger.info("[WakeUpLobby] /wl portal: player={} target={} token={} arrivalPortal={}",
-                                player.getUsername(), target, token, arrivalPortal);
+                        logger.info("[WakeUpLobby] /wl portal: player={} target={} arrivalPortal={}",
+                                player.getUsername(), target, arrivalPortal);
 
                         if (portalCommandHandler == null) {
                             logger.warn("[WakeUpLobby] /wl portal invoked before initialization completed");
@@ -305,16 +305,27 @@ public class CommandRegistrar {
                             return;
                         }
 
-                        // Manual admin switch should cancel any in-progress sticky auto-move sequence.
-                        runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
-                        plugin.cancelPortalTransfer(player.getUniqueId());
-                        runtime.stickyRouter().markInternalOnce(player.getUniqueId());
-                        player.createConnectionRequest(serverOpt.get()).fireAndForget();
+                        // Cancels any in-progress sticky move, then connects, or waits in the lobby while an offline server starts.
+                        plugin.adminConnect(player, serverOpt.get());
                     }
 
                     @Override
                     public boolean hasPermission(Invocation invocation) {
                         return invocation.source() instanceof Player player && hasBypass(player);
+                    }
+
+                    @Override
+                    public java.util.List<String> suggest(Invocation invocation) {
+                        String[] args = invocation.arguments();
+                        if (args.length > 1) {
+                            return java.util.List.of();
+                        }
+                        String prefix = args.length == 0 ? "" : args[0].toLowerCase(java.util.Locale.ROOT);
+                        return proxy.getAllServers().stream()
+                                .map(server -> server.getServerInfo().getName())
+                                .filter(name -> name.toLowerCase(java.util.Locale.ROOT).startsWith(prefix))
+                                .sorted()
+                                .collect(java.util.stream.Collectors.toList());
                     }
                 }
         );
@@ -355,12 +366,8 @@ public class CommandRegistrar {
 
                         Player targetPlayer = targetPlayerOpt.get();
 
-                        // Cancel any sticky wait exactly like the /server override
-                        runtime.stickyRouter().cancelStickyWait(targetPlayer.getUniqueId());
-                        plugin.cancelPortalTransfer(targetPlayer.getUniqueId());
-                        runtime.stickyRouter().markInternalOnce(targetPlayer.getUniqueId());
-
-                        targetPlayer.createConnectionRequest(serverOpt.get()).fireAndForget();
+                        // Exactly like the /server override: connect, or wait in the lobby while an offline server starts
+                        plugin.adminConnect(targetPlayer, serverOpt.get());
                         source.sendMessage(Component.text("§aMoving " + targetPlayerName + " to " + targetServerName + "..."));
                     }
 

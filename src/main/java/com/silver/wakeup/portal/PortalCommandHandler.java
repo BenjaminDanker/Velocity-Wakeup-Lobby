@@ -44,11 +44,11 @@ public class PortalCommandHandler {
         Objects.requireNonNull(token, "token");
         Objects.requireNonNull(arrivalPortalOpt, "arrivalPortalOpt");
 
-        log.info("[WakeUpLobby] /wl portal: player={} target={} token={} arrivalPortal={}",
-                player.getUsername(), targetServer, token, arrivalPortalOpt.orElse("<none>"));
+        log.info("[WakeUpLobby] /wl portal: player={} target={} arrivalPortal={}",
+                player.getUsername(), targetServer, arrivalPortalOpt.orElse("<none>"));
 
         if (!dependencies.verifyPortalToken(targetServer, token)) {
-            log.warn("[WakeUpLobby] Portal token verification failed for target={} token={}", targetServer, token);
+            log.warn("[WakeUpLobby] Portal token verification failed for target={}", targetServer);
             dependencies.notifyInvalidToken(player);
             return false;
         }

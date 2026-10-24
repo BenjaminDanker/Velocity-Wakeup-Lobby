@@ -70,6 +70,7 @@ final class StickySessionManager {
             }
         }
 
+        plugin.requestServer(target);
         long deadline = System.currentTimeMillis() + graceMillis;
         stickyStates.put(playerId, new StickyState(target, deadline, originServer));
         logger.info("[StickySession] Stored sticky state for player={} deadline={}", playerId, deadline);
@@ -132,6 +133,7 @@ final class StickySessionManager {
             }
         }
 
+        plugin.requestServer(state.target());
         var serverOpt = proxy.getServer(state.target());
         if (serverOpt.isEmpty()) {
             player.sendMessage(Component.text("⚠ Unknown server " + state.target()));

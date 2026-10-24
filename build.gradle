@@ -44,3 +44,9 @@ tasks.shadowJar {
   archiveBaseName.set('wake-up-lobby')
   archiveClassifier.set('')
 }
+
+// The plain jar would otherwise share the shadow jar's file name and could overwrite it; only the shadow jar is
+// deployable because it carries Authorization-Common, MariaDB and Hikari itself.
+tasks.jar {
+  archiveClassifier.set('thin')
+}

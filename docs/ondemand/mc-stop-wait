@@ -1,0 +1,10 @@
+#!/bin/bash
+# ExecStop of the server units: ask the server to stop, then wait until its screen session is gone so systemd never
+# kills a world that is still saving.
+name=$1
+screen -S "$name" -X stuff $'stop\r'
+for _ in $(seq 1 175); do
+  screen -ls 2>/dev/null | grep -q "\.${name}[[:space:]]" || exit 0
+  sleep 1
+done
+exit 0

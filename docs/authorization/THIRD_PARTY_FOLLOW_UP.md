@@ -2,7 +2,7 @@
 
 The dedicated authorization transport remains independent. ProxyCommand is still deployed:
 its Fabric artifact is present on each of the six primary backends and the Fabric
-waiting_lobby; the Velocity artifact remains under /home/silver/velocity/plugins.
+waiting_lobby; the Velocity artifact remains under /home/silver/mc-proxy/velocity/plugins.
 
 The inspected Fabric command is /proxycommand <command>. It requires vanilla permission
 level 2, rejects non-player sources, then sends an arbitrary command string over

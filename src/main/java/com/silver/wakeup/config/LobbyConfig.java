@@ -22,6 +22,7 @@ public class LobbyConfig {
 
     private final List<String> returnServerOrder;
     private final Map<String, List<ReturnSpecial>> returnSpecials;
+    private final OnDemandSettings onDemand;
 
     public LobbyConfig(
             String broadcastIp,
@@ -36,6 +37,25 @@ public class LobbyConfig {
             List<String> returnServerOrder,
             Map<String, List<ReturnSpecial>> returnSpecials
     ) {
+        this(broadcastIp, holdingServer, graceSec, pingEverySec, serverToMac, groups, globalPortalSecret, perPortalSecrets,
+            backendPortalRequestSecrets, returnServerOrder, returnSpecials, OnDemandSettings.DISABLED);
+    }
+
+    public LobbyConfig(
+            String broadcastIp,
+            String holdingServer,
+            long graceSec,
+            long pingEverySec,
+            Map<String, String> serverToMac,
+            Map<String, List<String>> groups,
+            String globalPortalSecret,
+            Map<String, String> perPortalSecrets,
+            Map<String, String> backendPortalRequestSecrets,
+            List<String> returnServerOrder,
+            Map<String, List<ReturnSpecial>> returnSpecials,
+            OnDemandSettings onDemand
+    ) {
+        this.onDemand = Objects.requireNonNull(onDemand, "onDemand");
         this.broadcastIp = Objects.requireNonNull(broadcastIp, "broadcastIp");
         this.holdingServer = Objects.requireNonNull(holdingServer, "holdingServer");
         this.graceSec = graceSec;
@@ -48,6 +68,10 @@ public class LobbyConfig {
 
         this.returnServerOrder = List.copyOf(Objects.requireNonNull(returnServerOrder, "returnServerOrder"));
         this.returnSpecials = Collections.unmodifiableMap(copyReturnSpecials(returnSpecials));
+    }
+
+    public OnDemandSettings onDemand() {
+        return onDemand;
     }
 
     public String broadcastIp() {

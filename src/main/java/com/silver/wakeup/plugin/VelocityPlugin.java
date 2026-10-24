@@ -18,10 +18,12 @@ import com.silver.authorization.PermissionNodes;
 import com.silver.authorization.ServerId;
 import com.silver.wakeup.config.LobbyConfig;
 import com.silver.wakeup.config.LobbyConfigLoader;
+import com.silver.wakeup.ondemand.OnDemandController;
+import com.silver.wakeup.ondemand.OnDemandPlanner;
 import com.silver.wakeup.portal.PortalCommandHandler;
 import com.silver.wakeup.portal.PortalCommandHandler.HoldingConnection;
 import com.silver.wakeup.portal.PortalHandoffService;
-import com.silver.wakeup.portal.PortalRequestPayloadCodec;
+import com.silver.authorization.PortalRequestCodec;
 import com.silver.wakeup.portal.PortalRequestVerifier;
 import com.silver.wakeup.portal.PortalTokenVerifier;
 import com.silver.wakeup.state.PortalTransfer;
@@ -41,6 +43,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import net.kyori.adventure.text.Component;
@@ -113,6 +116,7 @@ public class VelocityPlugin {
     // fresh-player admission
     private AdmissionClient admissionClient;
     private BackendHealthMonitor backendHealthMonitor;
+    private OnDemandController onDemand;
     private final AdmissionQueue admissionQueue = new AdmissionQueue();
     private final OfflineWaitManager offlineWaitManager = new OfflineWaitManager();
     private final Set<UUID> freshAdmissions = ConcurrentHashMap.newKeySet();
@@ -329,6 +333,8 @@ public class VelocityPlugin {
 
             admissionClient = new AdmissionClient(ADMISSION_STATUS_URL);
             backendHealthMonitor = new BackendHealthMonitor(proxy, logger);
+            onDemand = new OnDemandController(logger, runtime::wakeHost);
+            onDemand.configure(config.onDemand());
 
             // Prime both caches immediately, then keep them fresh.
             admissionClient.refresh();
@@ -339,6 +345,11 @@ public class VelocityPlugin {
                     .schedule();
 
             proxy.getScheduler().buildTask(this, () -> backendHealthMonitor.refresh(runtime.holdingServer()))
+                    .repeat(Duration.ofSeconds(2))
+                    .schedule();
+
+            proxy.getScheduler().buildTask(this, this::onDemandTick)
+                    .delay(Duration.ofSeconds(2))
                     .repeat(Duration.ofSeconds(2))
                     .schedule();
 
@@ -412,7 +423,7 @@ public class VelocityPlugin {
     private Set<ServerId> configuredAuthorizationServers() {
         Set<ServerId> configured = new HashSet<>();
         proxy.getAllServers().forEach(server -> configured.add(ServerId.of(server.getServerInfo().getName())));
-        Set<ServerId> expected = Set.of("waiting_lobby", "vanilla1", "sky-island", "ocean", "desert", "cave", "magic")
+        Set<ServerId> expected = Set.of("waiting_lobby", "vanilla", "sky-island", "ocean", "desert", "cave", "magic")
                 .stream().map(ServerId::of).collect(Collectors.toUnmodifiableSet());
         Set<ServerId> missing = new HashSet<>(expected);
         missing.removeAll(configured);
@@ -487,7 +498,7 @@ public class VelocityPlugin {
             }
 
             String backendName = backendConn.getServerInfo().getName();
-            var requestOpt = PortalRequestPayloadCodec.decode(event.getData());
+            var requestOpt = PortalRequestCodec.decode(event.getData());
             if (requestOpt.isEmpty()) {
                 logger.warn("[WakeUpLobby] Invalid portal_request payload from backend {}", backendName);
                 return;
@@ -751,6 +762,29 @@ public class VelocityPlugin {
         }
 
         String requested = destOpt.get().getServerInfo().getName();
+
+        // Exclusive branches: once a player has entered one server of the group they can never
+        // enter another, however they ask (portal, /server, or login routing). Staff bypass.
+        if (!hasBypass(player) && lockedOutOfBranch(player.getUniqueId(), requested)) {
+            logger.warn("[WakeUpLobby] onPreConnect: {} is locked out of exclusive branch '{}' (DENIED)",
+                    player.getUsername(), requested);
+            player.sendMessage(Component.text("⚠ You chose a different path and cannot enter " + requested + "."));
+            e.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return;
+        }
+
+        // Completion gates: groups named "completion_gate:<server>" list the story branches (any one) that open the server.
+        List<String> gate = runtime.groupMembers("completion_gate:" + requested);
+        if (!gate.isEmpty() && !hasBypass(player)
+                && routingState.completedBranches(player.getUniqueId()).stream().noneMatch(done -> gate.contains(done))) {
+            logger.warn("[WakeUpLobby] onPreConnect: {} has not completed {} (DENIED entry to '{}')",
+                    player.getUsername(), gate, requested);
+            player.sendMessage(Component.text("⚠ " + requested + " opens to players who have completed the "
+                    + String.join(" or ", gate) + " story."));
+            e.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return;
+        }
+
         String preferred = preferredFor(player.getUniqueId()).orElse(requested);
         
         logger.info("[WakeUpLobby] onPreConnect: player={} requested={} preferred={}", 
@@ -930,6 +964,7 @@ public class VelocityPlugin {
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
+        if (onDemand != null) onDemand.close();
         if (commandCatalogReceiver != null) commandCatalogReceiver.close();
         if (authorizationService != null) authorizationService.close();
         if (routingState != null) {
@@ -951,6 +986,12 @@ public class VelocityPlugin {
         }
 
         offlineWaitManager.add(playerId);
+        if (onDemand != null && onDemand.manages(target)) {
+            requestServer(target);
+            player.sendMessage(Component.text("§e" + target + " is starting up. You will enter the queue when it is ready."));
+            logger.info("[Admission] {} is waiting for '{}' to start", player.getUsername(), target);
+            return;
+        }
         player.sendMessage(Component.text("§e" + target + " is currently offline. You will enter the queue when it returns."));
         player.sendMessage(Component.text("§7After the normal grace period, you can use /return to queue for your return destination instead."));
         logger.info("[Admission] {} waiting outside queue because target '{}' is offline",
@@ -980,6 +1021,98 @@ public class VelocityPlugin {
             return AdmissionQueue.Tier.VIP;
         }
         return AdmissionQueue.Tier.NORMAL;
+    }
+
+    /**
+     * An admin command (/server, /forceserver) moves a player to a server. A server that is running is connected to at once. One that
+     * is offline (stopped for being idle, or still starting) is not tried directly, because a failed connection would bounce the player
+     * back to where they were: they wait in the lobby instead while it is woken and started, and are moved when it answers.
+     */
+    public void adminConnect(Player player, RegisteredServer target) {
+        UUID id = player.getUniqueId();
+        String name = target.getServerInfo().getName();
+        String holding = runtime.holdingServer();
+        runtime.stickyRouter().cancelStickyWait(id);
+        cancelPortalTransfer(id);
+        boolean offline = !name.equalsIgnoreCase(holding) && backendHealthMonitor != null && !backendHealthMonitor.isOnline(name);
+        if (!offline) {
+            runtime.stickyRouter().markInternalOnce(id);
+            player.createConnectionRequest(target).fireAndForget();
+            return;
+        }
+        String origin = currentServerName(player).orElse(null);
+        player.sendMessage(Component.text("§e" + name + " is offline. Starting it; you will be moved when it is ready."));
+        logger.info("[Admin] {} asked for offline server '{}'; waiting in '{}' while it starts", player.getUsername(), name, holding);
+        Runnable wait = () -> runtime.stickyRouter().beginStickyWait(id, name, origin);
+        if (holding.equalsIgnoreCase(origin)) {
+            wait.run();
+            return;
+        }
+        var lobby = proxy.getServer(holding);
+        if (lobby.isEmpty()) {
+            logger.error("[Admin] holding server '{}' is not registered; cannot wait for '{}'", holding, name);
+            player.sendMessage(Component.text("⚠ The waiting lobby is not available."));
+            return;
+        }
+        runtime.stickyRouter().markInternalOnce(id);
+        player.createConnectionRequest(lobby.get()).connect().whenComplete((result, failure) -> {
+            if (result != null && result.isSuccessful()) {
+                wait.run();
+            } else {
+                logger.warn("[Admin] could not move {} to the waiting lobby: {}", player.getUsername(), failure == null ? "not successful" : failure.toString());
+                player.sendMessage(Component.text("⚠ Could not reach the waiting lobby."));
+            }
+        });
+    }
+
+    /** Someone is waiting for this server. If it is managed on demand it is started (and kept running) until they are in. */
+    public void requestServer(String name) {
+        if (onDemand != null && name != null) {
+            onDemand.want(name);
+        }
+    }
+
+    /** What the on-demand controller needs every couple of seconds: who is up, who is on them, who is waiting for them. */
+    private void onDemandTick() {
+        if (onDemand == null || !onDemand.enabled() || runtime == null || backendHealthMonitor == null) {
+            return;
+        }
+        try {
+            for (OfflineWaitManager.Entry entry : offlineWaitManager.snapshot()) {
+                preferredFor(entry.playerId()).ifPresent(this::requestServer);
+            }
+            startRequestedByFile();
+            Map<String, OnDemandPlanner.Observed> observed = new java.util.HashMap<>();
+            for (var registered : proxy.getAllServers()) {
+                String name = registered.getServerInfo().getName();
+                if (name.equalsIgnoreCase(runtime.holdingServer())) {
+                    continue;
+                }
+                observed.put(name, new OnDemandPlanner.Observed(backendHealthMonitor.isOnline(name), registered.getPlayersConnected().size()));
+            }
+            onDemand.tick(observed);
+        } catch (RuntimeException failure) {
+            logger.warn("[OnDemand] tick failed: {}", failure.toString());
+        }
+    }
+
+    /**
+     * Lets an admin start a server without joining it: creating plugins/wakeuplobby/start-<server> asks for that server once and
+     * the file is removed. It is how the start path is exercised without a Minecraft client.
+     */
+    private void startRequestedByFile() {
+        try (var files = java.nio.file.Files.list(dataDir)) {
+            for (java.nio.file.Path file : (Iterable<java.nio.file.Path>) files::iterator) {
+                String name = file.getFileName().toString();
+                if (name.startsWith("start-") && onDemand.manages(name.substring("start-".length()))) {
+                    requestServer(name.substring("start-".length()));
+                    java.nio.file.Files.deleteIfExists(file);
+                    logger.info("[OnDemand] start of '{}' requested by file", name.substring("start-".length()));
+                }
+            }
+        } catch (java.io.IOException failure) {
+            logger.warn("[OnDemand] could not look for start requests: {}", failure.toString());
+        }
     }
 
     private void promoteOfflineWaiters() {
@@ -1214,6 +1347,14 @@ public class VelocityPlugin {
         return def.get(0);
     }
 
+    /** True when {@code requested} is in the {@code exclusive_branches} group and another one was visited. */
+    private boolean lockedOutOfBranch(UUID who, String requested) {
+        List<String> branches = runtime.groupMembers("exclusive_branches");
+        // Only a branch server can be locked, so skip the database read for every other connect.
+        if (branches.stream().noneMatch(b -> b.equalsIgnoreCase(requested))) return false;
+        return com.silver.wakeup.session.BranchLock.lockedOut(branches, routingState.refreshVisitedServers(who), requested);
+    }
+
     /** Highest index in default_group the player has visited; -1 if none. */
     private int maxVisitedIndex(UUID who) {
         var def = runtime.groupMembers("default_group");
@@ -1229,24 +1370,21 @@ public class VelocityPlugin {
         var seen = routingState.visitedServers(who);
         int max = maxVisitedIndex(who);
         
-        logger.info("[WakeUpLobby] allowedTargetsDownward: uuid={} visited={} maxIndex={}", who, seen, max);
+        logger.debug("[WakeUpLobby] allowedTargetsDownward: uuid={} visited={} maxIndex={}", who, seen, max);
         
         if (def.isEmpty()) return List.of();
         if (max < 0) return List.of(def.get(0));
         var out = new ArrayList<String>(max + 1);
         for (int i = max; i >= 0; i--) out.add(def.get(i));
         
-        logger.info("[WakeUpLobby] allowedTargetsDownward: returning {}", out);
+        logger.debug("[WakeUpLobby] allowedTargetsDownward: returning {}", out);
         return out;
     }
 
     private Optional<String> chooseFirstOnline(List<String> names) {
         for (String name : names) {
-            var reg = proxy.getServer(name);
-            if (reg.isEmpty()) continue;
-            try {
-                if (reg.get().ping().getNow(null) != null) return Optional.of(name);
-            } catch (Exception ignored) {}
+            if (proxy.getServer(name).isEmpty()) continue;
+            if (backendHealthMonitor != null && backendHealthMonitor.isOnline(name)) return Optional.of(name);
         }
         return Optional.empty();
     }
@@ -1258,6 +1396,9 @@ public class VelocityPlugin {
     private LobbyConfig loadConfig() throws IOException {
         LobbyConfig config = configLoader.load();
         runtime.applyConfig(config, this::allowedTargetsDownward);
+        if (onDemand != null) {
+            onDemand.configure(config.onDemand());
+        }
         return config;
     }
 

@@ -36,7 +36,7 @@ class PortalHandoffServiceTest {
         UUID playerId = UUID.randomUUID();
         UUID transferId = UUID.randomUUID();
         Instant expiry = Instant.now().plusSeconds(30);
-        PortalTransfer transfer = new PortalTransfer(transferId, playerId, "vanilla1", "sky-island",
+        PortalTransfer transfer = new PortalTransfer(transferId, playerId, "vanilla", "sky-island",
                 "sky-island_entrance", PortalTransfer.Status.CLAIMED, Instant.now(), expiry);
         when(routing.consumeHandoff(playerId, "sky-island")).thenReturn(Optional.of(transfer), Optional.empty());
 

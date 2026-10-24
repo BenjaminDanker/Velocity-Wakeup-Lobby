@@ -33,13 +33,13 @@ mods already present on that backend:
 
 | Canonical ID | Backend directory | Migrated jars |
 | --- | --- | --- |
-| vanilla1 | /home/silver/vanilla-mc-server | MPDS, Pet Companion, Server Portals, Spawn Protect, Villager Interface |
+| vanilla | /home/silver/mc-servers/vanilla | MPDS, Pet Companion, Server Portals, Spawn Protect, Villager Interface |
 | sky-island | /mnt/mc-fast/sky-island-mc-server | Disable Dimensions, MPDS, Pet Companion, Server Portals, Sky Islands, Spawn Protect |
 | ocean | /mnt/mc-storage/ocean-mc-server | Atlantis, Disable Dimensions, MPDS, Pet Companion, Server Portals, Spawn Protect |
 | desert | /mnt/mc-fast/desert-mc-server | Disable Dimensions, MPDS, Pet Companion, Server Portals, Spawn Protect |
 | cave | /mnt/mc-storage/cave-mc-server | Disable Dimensions, MPDS, Pet Companion, Server Portals, Spawn Protect |
-| magic | /home/silver/magic-mc-server | Network Authorization, MPDS, Pet Companion, Server Portals, Spawn Protect |
-| waiting_lobby | /home/silver/mc_waiting_lobby on the Pi | MPDS, Border Lock |
+| magic | /home/silver/mc-servers/magic | Network Authorization, MPDS, Pet Companion, Server Portals, Spawn Protect |
+| waiting_lobby | /home/silver/mc-proxy/lobby on the Pi | MPDS, Border Lock |
 
 Ender Fight is built but was not present on an active backend during inventory. Deploy it only where
 that gameplay mod is intended. ProxyCommand and OpenPAC are intentionally not changed.
@@ -56,7 +56,7 @@ that gameplay mod is intended. ProxyCommand and OpenPAC are intentionally not ch
    snapshot. A missing snapshot denies only the newly centralized checks; it never falls back to
    vanilla OP.
 3. Verify /auth role list, then inspect the baseline and relevant capabilities, for example:
-   /auth explain <uuid> aipets.use vanilla1 and /auth explain <uuid> portal.use vanilla1.
+   /auth explain <uuid> aipets.use vanilla and /auth explain <uuid> portal.use vanilla.
    Manage users by UUID where possible: /auth user <uuid> role add ADMIN. Default PLAYER is
    data-driven and additive, so staff retains normal gameplay capabilities without a Java role
    hierarchy.
