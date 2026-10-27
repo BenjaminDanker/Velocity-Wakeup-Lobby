@@ -75,8 +75,19 @@ public final class OnDemandController {
     /** mc-ctl's exit code when the server has a job running and must not be stopped yet. */
     private static final int BUSY_EXIT = 75;
 
+    /** Players on a backend right now, read again just before a stop (the plan used a snapshot). */
+    private volatile java.util.function.ToIntFunction<String> playersNow = server -> 0;
+
+    public void setPlayerCount(java.util.function.ToIntFunction<String> playersNow) {
+        this.playersNow = playersNow;
+    }
+
     private void perform(OnDemandSettings current, OnDemandPlanner.Action action) {
         String verb = action.kind() == OnDemandPlanner.Kind.START ? "start" : "stop";
+        if (action.kind() == OnDemandPlanner.Kind.STOP && playersNow.applyAsInt(action.server()) > 0) {
+            log.info("[OnDemand] '{}' got a player since the idle check; not stopping it", action.server());
+            return;
+        }
         if (action.kind() == OnDemandPlanner.Kind.START) {
             // the machine may be asleep; the packet is harmless when it is not
             wakeHost.accept(action.server());

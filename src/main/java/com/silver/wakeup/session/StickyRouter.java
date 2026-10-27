@@ -25,7 +25,9 @@ public class StickyRouter {
     private final Map<String, String> serverToMac;    // server -> mac
     private final Logger log;
 
-    private final Set<UUID> internalOnce = ConcurrentHashMap.newKeySet();
+    /** Player -> when the mark was set. Marks expire, so a connect that failed can't leave a bypass behind. */
+    private final java.util.Map<UUID, Long> internalOnce = new ConcurrentHashMap<>();
+    private static final long INTERNAL_MARK_TTL_MS = 30_000L;
     private final StickySessionManager sessionManager;
 
     private record ReturnEligibility(String originServer, String targetServer, long eligibleSinceMs) {}
@@ -87,12 +89,13 @@ public class StickyRouter {
     /** Mark next PreConnect for this player as plugin-internal (skip manual checks). */
     public void markInternalOnce(UUID who) {
         log.debug("[StickyRouter] markInternalOnce: player={}", who);
-        internalOnce.add(who);
+        internalOnce.put(who, System.currentTimeMillis());
     }
 
     /** Consume the internal mark; returns true if we should bypass checks. */
     public boolean consumeInternalOnce(UUID who) {
-        boolean wasInternal = internalOnce.remove(who);
+        Long markedAt = internalOnce.remove(who);
+        boolean wasInternal = markedAt != null && System.currentTimeMillis() - markedAt <= INTERNAL_MARK_TTL_MS;
         log.debug("[StickyRouter] consumeInternalOnce: player={} wasInternal={}", who, wasInternal);
         return wasInternal;
     }

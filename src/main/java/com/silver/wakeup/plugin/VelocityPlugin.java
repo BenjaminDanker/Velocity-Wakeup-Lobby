@@ -334,6 +334,7 @@ public class VelocityPlugin {
             admissionClient = new AdmissionClient(ADMISSION_STATUS_URL);
             backendHealthMonitor = new BackendHealthMonitor(proxy, logger);
             onDemand = new OnDemandController(logger, runtime::wakeHost);
+            onDemand.setPlayerCount(name -> proxy.getServer(name).map(server -> server.getPlayersConnected().size()).orElse(0));
             onDemand.configure(config.onDemand());
 
             // Prime both caches immediately, then keep them fresh.
