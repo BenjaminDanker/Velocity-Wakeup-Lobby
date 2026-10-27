@@ -35,10 +35,11 @@ public class RuntimeState {
     private String holdingServer = "waiting_lobby";
     private long graceSec = 90;
     private long pingEverySec = 2;
-    private final Map<String, List<String>> groups = new HashMap<>();
-    private final Map<String, String> serverToMac = new HashMap<>();
+    // Replaced whole on reload (event threads read them while a reload runs).
+    private volatile Map<String, List<String>> groups = Map.of();
+    private volatile Map<String, String> serverToMac = Map.of();
     private WakeService wakeService;
-    private StickyRouter stickyRouter;
+    private volatile StickyRouter stickyRouter;
 
     public RuntimeState(ProxyServer proxy,
                         VelocityPlugin plugin,
@@ -60,11 +61,10 @@ public class RuntimeState {
         this.graceSec = config.graceSec();
         this.pingEverySec = config.pingEverySec();
 
-        this.serverToMac.clear();
-        this.serverToMac.putAll(config.serverToMac());
-
-        this.groups.clear();
-        config.groups().forEach((key, value) -> this.groups.put(key, new ArrayList<>(value)));
+        this.serverToMac = Map.copyOf(config.serverToMac());
+        Map<String, List<String>> newGroups = new HashMap<>();
+        config.groups().forEach((key, value) -> newGroups.put(key, List.copyOf(value)));
+        this.groups = Map.copyOf(newGroups);
 
         try {
             this.wakeService = new WakeService(config.broadcastIp());
@@ -72,7 +72,8 @@ public class RuntimeState {
             throw new IOException("Invalid broadcast IP: " + config.broadcastIp(), ex);
         }
 
-        this.stickyRouter = new StickyRouter(
+        StickyRouter previousRouter = this.stickyRouter;
+        StickyRouter newRouter = new StickyRouter(
                 proxy,
                 plugin,
                 holdingServer,
@@ -85,6 +86,8 @@ public class RuntimeState {
                 allowedTargetsDownward,
                 portalHandoffService
         );
+        newRouter.sharePlayerStateFrom(previousRouter);
+        this.stickyRouter = newRouter;
 
         portalTokenVerifier.updateSecrets(config.globalPortalSecret(), config.perPortalSecrets());
         portalRequestVerifier.updateSecrets(config.backendPortalRequestSecrets());

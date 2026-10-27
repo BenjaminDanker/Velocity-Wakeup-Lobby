@@ -26,12 +26,12 @@ public class StickyRouter {
     private final Logger log;
 
     /** Player -> when the mark was set. Marks expire, so a connect that failed can't leave a bypass behind. */
-    private final java.util.Map<UUID, Long> internalOnce = new ConcurrentHashMap<>();
+    private java.util.Map<UUID, InternalMark> internalOnce = new ConcurrentHashMap<>();
     private static final long INTERNAL_MARK_TTL_MS = 30_000L;
     private final StickySessionManager sessionManager;
 
     private record ReturnEligibility(String originServer, String targetServer, long eligibleSinceMs) {}
-    private final ConcurrentHashMap<UUID, ReturnEligibility> returnEligible = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<UUID, ReturnEligibility> returnEligible = new ConcurrentHashMap<>();
 
     public StickyRouter(
             ProxyServer proxy,
@@ -86,18 +86,43 @@ public class StickyRouter {
         sessionManager.beginStickyWait(playerId, target, originServer, mac);
     }
 
-    /** Mark next PreConnect for this player as plugin-internal (skip manual checks). */
-    public void markInternalOnce(UUID who) {
-        log.debug("[StickyRouter] markInternalOnce: player={}", who);
-        internalOnce.put(who, System.currentTimeMillis());
+    /**
+     * Marks the player's next connect to {@code target} as plugin-internal (it skips the manual-switch and tier
+     * checks). The mark only matches that server, expires after {@value #INTERNAL_MARK_TTL_MS} ms, and is cleared when
+     * the player disconnects, so a connect that failed can't leave a bypass for a later, manual one.
+     */
+    public void markInternalOnce(UUID who, String target) {
+        log.debug("[StickyRouter] markInternalOnce: player={} target={}", who, target);
+        internalOnce.put(who, new InternalMark(target, System.currentTimeMillis()));
     }
 
-    /** Consume the internal mark; returns true if we should bypass checks. */
-    public boolean consumeInternalOnce(UUID who) {
-        Long markedAt = internalOnce.remove(who);
-        boolean wasInternal = markedAt != null && System.currentTimeMillis() - markedAt <= INTERNAL_MARK_TTL_MS;
-        log.debug("[StickyRouter] consumeInternalOnce: player={} wasInternal={}", who, wasInternal);
+    /** Consumes the mark; true when it was set for {@code target} and is still fresh. */
+    public boolean consumeInternalOnce(UUID who, String target) {
+        InternalMark mark = internalOnce.remove(who);
+        boolean wasInternal = mark != null && mark.target().equalsIgnoreCase(target)
+                && System.currentTimeMillis() - mark.markedAtMillis() <= INTERNAL_MARK_TTL_MS;
+        log.debug("[StickyRouter] consumeInternalOnce: player={} target={} wasInternal={}", who, target, wasInternal);
         return wasInternal;
+    }
+
+    /**
+     * After a config reload: keep the players' marks and /return eligibility from the router this one replaces. Both
+     * routers then use the same maps, so a sticky wait still running on the old router marks its final connect where
+     * the new router's pre-connect check finds it, instead of the connect being treated as manual.
+     */
+    public void sharePlayerStateFrom(StickyRouter previous) {
+        if (previous != null) {
+            this.internalOnce = previous.internalOnce;
+            this.returnEligible = previous.returnEligible;
+        }
+    }
+
+    /** Drops any mark (connect failed, or the player left). */
+    public void clearInternalMark(UUID who) {
+        internalOnce.remove(who);
+    }
+
+    private record InternalMark(String target, long markedAtMillis) {
     }
 
     /** Check if there's an active sticky state for this player. */

@@ -68,7 +68,10 @@ public final class AdmissionQueue {
     }
 
     public void remove(UUID playerId) {
-        entries.remove(playerId);
+        Entry removed = entries.remove(playerId);
+        if (removed != null) {
+            queue.remove(removed); // otherwise it stays in the heap until it reaches the front
+        }
     }
 
     public boolean contains(UUID playerId) {

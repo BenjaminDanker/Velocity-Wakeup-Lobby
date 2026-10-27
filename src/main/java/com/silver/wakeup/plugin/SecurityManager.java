@@ -131,6 +131,20 @@ public class SecurityManager {
 
     private boolean isRateLimited(InetAddress ip) {
         long now = System.currentTimeMillis();
+        if (connectionHistory.size() > 512) {
+            // Addresses with no connection inside the window can't be rate limited any more; forget them.
+            connectionHistory.entrySet().removeIf(entry -> {
+                synchronized (entry.getValue()) {
+                    for (long at : entry.getValue()) {
+                        if (now - at <= WINDOW_MILLIS) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            });
+            greylist.values().removeIf(expiry -> expiry <= now);
+        }
         long[] history = connectionHistory.computeIfAbsent(ip, k -> new long[MAX_CONN_PER_WINDOW]);
         
         synchronized (history) {

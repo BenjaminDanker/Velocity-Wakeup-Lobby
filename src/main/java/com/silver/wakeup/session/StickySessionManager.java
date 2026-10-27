@@ -170,7 +170,7 @@ final class StickySessionManager {
                     }
                     Player connectedPlayer = currentPlayer.get();
                     connectedPlayer.sendActionBar(Component.text("✅ " + state.target() + " is ready. Moving you now…"));
-                    router.markInternalOnce(playerId);
+                    router.markInternalOnce(playerId, serverOpt.get().getServerInfo().getName());
                     connectedPlayer.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, connectErr) -> {
                         if (result != null && result.isSuccessful()) {
                             cleanupStickyState(playerId);

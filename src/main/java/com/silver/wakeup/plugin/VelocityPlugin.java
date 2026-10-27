@@ -792,7 +792,7 @@ public class VelocityPlugin {
                    player.getUsername(), requested, preferred);
 
         // Allow plugin-internal switches (auto-move on ready)
-        if (runtime.stickyRouter().consumeInternalOnce(player.getUniqueId())) {
+        if (runtime.stickyRouter().consumeInternalOnce(player.getUniqueId(), requested)) {
             logger.info("[WakeUpLobby] onPreConnect: {} internal switch -> '{}' (ALLOWED)", player.getUsername(), requested);
             return;
         }
@@ -955,6 +955,7 @@ public class VelocityPlugin {
         freshAdmissions.remove(playerId);
         admissionQueue.remove(playerId);
         offlineWaitManager.remove(playerId);
+        runtime.stickyRouter().clearInternalMark(playerId);
     }
 
     void cancelPortalTransfer(UUID playerId) {
@@ -1037,7 +1038,7 @@ public class VelocityPlugin {
         cancelPortalTransfer(id);
         boolean offline = !name.equalsIgnoreCase(holding) && backendHealthMonitor != null && !backendHealthMonitor.isOnline(name);
         if (!offline) {
-            runtime.stickyRouter().markInternalOnce(id);
+            runtime.stickyRouter().markInternalOnce(id, target.getServerInfo().getName());
             player.createConnectionRequest(target).fireAndForget();
             return;
         }
@@ -1055,7 +1056,7 @@ public class VelocityPlugin {
             player.sendMessage(Component.text("⚠ The waiting lobby is not available."));
             return;
         }
-        runtime.stickyRouter().markInternalOnce(id);
+        runtime.stickyRouter().markInternalOnce(id, lobby.get().getServerInfo().getName());
         player.createConnectionRequest(lobby.get()).connect().whenComplete((result, failure) -> {
             if (result != null && result.isSuccessful()) {
                 wait.run();
@@ -1206,7 +1207,7 @@ public class VelocityPlugin {
                 logger.info("[Admission] releasing {} -> {} tier={}",
                         player.getUsername(), target, entry.tier());
 
-                runtime.stickyRouter().markInternalOnce(entry.playerId());
+                runtime.stickyRouter().markInternalOnce(entry.playerId(), serverOpt.get().getServerInfo().getName());
                 player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, error) -> {
                     admissionDispatchInFlight.set(false);
 
@@ -1215,7 +1216,7 @@ public class VelocityPlugin {
                     }
 
                     // Clear an internal marker if ServerPreConnectEvent never consumed it.
-                    runtime.stickyRouter().consumeInternalOnce(entry.playerId());
+                    runtime.stickyRouter().clearInternalMark(entry.playerId());
                     backendHealthMonitor.markOffline(target);
 
                     Optional<Player> stillOnline = proxy.getPlayer(entry.playerId());
@@ -1451,8 +1452,8 @@ public class VelocityPlugin {
         }
 
         @Override
-        public void markInternalOnce(UUID playerId) {
-            runtime.stickyRouter().markInternalOnce(playerId);
+        public void markInternalOnce(UUID playerId, String target) {
+            runtime.stickyRouter().markInternalOnce(playerId, target);
         }
 
         @Override

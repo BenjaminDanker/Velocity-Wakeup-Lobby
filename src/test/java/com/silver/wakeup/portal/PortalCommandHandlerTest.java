@@ -54,6 +54,7 @@ class PortalCommandHandlerTest {
         assertEquals("portal_a", dependencies.arrivalPortal);
         assertTrue(dependencies.beginStickyCalled, "Expected sticky wait to begin");
         assertTrue(dependencies.markInternalCalled, "Expected internal mark to be set");
+        assertEquals("holding", dependencies.markInternalTarget, "Expected internal mark to target the holding server");
         assertTrue(dependencies.connectionResolved, "Expected holding connection to be resolved");
         assertTrue(dependencies.connectionInvoked, "Expected holding connection to be triggered");
     }
@@ -77,6 +78,7 @@ class PortalCommandHandlerTest {
         String arrivalPortal;
         boolean beginStickyCalled;
         boolean markInternalCalled;
+        String markInternalTarget;
         boolean invalidTokenNotified;
         boolean connectionResolved;
         boolean connectionInvoked;
@@ -114,8 +116,9 @@ class PortalCommandHandlerTest {
         }
 
         @Override
-        public void markInternalOnce(UUID playerId) {
+        public void markInternalOnce(UUID playerId, String target) {
             markInternalCalled = true;
+            markInternalTarget = target;
         }
 
         @Override

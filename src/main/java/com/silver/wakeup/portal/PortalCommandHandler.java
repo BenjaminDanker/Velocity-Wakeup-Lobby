@@ -19,7 +19,7 @@ public class PortalCommandHandler {
         Optional<String> currentServerName(Player player);
         Optional<HoldingConnection> resolveHoldingServer(Player player, String target, Optional<String> originServer);
         void beginStickyWait(UUID playerId, String target, Optional<String> originServer);
-        void markInternalOnce(UUID playerId);
+        void markInternalOnce(UUID playerId, String target);
         void notifyInvalidToken(Player player);
         void notifyTransferFailure(Player player);
         String holdingServerName();
@@ -86,7 +86,7 @@ public class PortalCommandHandler {
                         return;
                     }
                     dependencies.beginStickyWait(playerId, targetServer, originServer);
-                    dependencies.markInternalOnce(playerId);
+                    dependencies.markInternalOnce(playerId, dependencies.holdingServerName());
                     holdingConnection.get().connect();
                 });
         return true;

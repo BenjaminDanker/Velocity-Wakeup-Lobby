@@ -476,7 +476,7 @@ public class CommandRegistrar {
                                 // Manual return should cancel any in-progress sticky auto-move sequence.
                                 runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
                                 plugin.cancelPortalTransfer(player.getUniqueId());
-                                runtime.stickyRouter().markInternalOnce(player.getUniqueId());
+                                runtime.stickyRouter().markInternalOnce(player.getUniqueId(), serverOpt.get().getServerInfo().getName());
                                 player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                                     if (err != null || result == null || !result.isSuccessful()) {
                                         player.sendMessage(Component.text("⚠ Failed to connect to " + dest + "."));
@@ -493,7 +493,7 @@ public class CommandRegistrar {
                         runtime.stickyRouter().clearReturnEligibility(player.getUniqueId());
                         runtime.stickyRouter().cancelStickyWait(player.getUniqueId());
                         plugin.cancelPortalTransfer(player.getUniqueId());
-                        runtime.stickyRouter().markInternalOnce(player.getUniqueId());
+                        runtime.stickyRouter().markInternalOnce(player.getUniqueId(), serverOpt.get().getServerInfo().getName());
                         player.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, err) -> {
                             if (err != null || result == null || !result.isSuccessful()) {
                                 player.sendMessage(Component.text("⚠ Failed to connect to " + dest + "."));
