@@ -1470,5 +1470,39 @@ public class VelocityPlugin {
         public String holdingServerName() {
             return runtime.holdingServer();
         }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Boolean> tryDirectConnect(Player player, String target) {
+            Optional<RegisteredServer> registered = proxy.getServer(target);
+            if (registered.isEmpty()) {
+                return java.util.concurrent.CompletableFuture.completedFuture(false);
+            }
+            UUID playerId = player.getUniqueId();
+            java.util.concurrent.CompletableFuture<Boolean> moved = new java.util.concurrent.CompletableFuture<>();
+            registered.get().ping().orTimeout(1, java.util.concurrent.TimeUnit.SECONDS).whenComplete((pong, pingFailure) -> {
+                if (pingFailure != null) {
+                    moved.complete(false); // not up (or slow): the lobby wakes it and waits
+                    return;
+                }
+                portalHandoffService.claimForTarget(playerId, target).whenComplete((claimed, claimFailure) -> {
+                    if (claimFailure != null) {
+                        moved.complete(false);
+                        return;
+                    }
+                    runtime.stickyRouter().markInternalOnce(playerId, registered.get().getServerInfo().getName());
+                    player.createConnectionRequest(registered.get()).connect().whenComplete((result, connectFailure) -> {
+                        if (connectFailure == null && result != null && result.isSuccessful()) {
+                            moved.complete(true);
+                            return;
+                        }
+                        // Put the transfer back so the lobby route can claim it again.
+                        claimed.map(transfer -> portalHandoffService.connectionFailed(playerId, transfer))
+                                .orElse(java.util.concurrent.CompletableFuture.completedFuture(null))
+                                .whenComplete((ignored, alsoIgnored) -> moved.complete(false));
+                    });
+                });
+            });
+            return moved;
+        }
     }
 }

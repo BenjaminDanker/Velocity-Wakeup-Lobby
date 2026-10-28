@@ -76,7 +76,7 @@ final class StickySessionManager {
         logger.info("[StickySession] Stored sticky state for player={} deadline={}", playerId, deadline);
 
         tickTasks.computeIfAbsent(playerId, id -> proxy.getScheduler().buildTask(plugin, () -> tick(id))
-                .delay(Duration.ofSeconds(1))
+                .delay(Duration.ofMillis(250))
                 .repeat(Duration.ofMillis(pingIntervalMillis))
                 .schedule());
     }
@@ -124,6 +124,11 @@ final class StickySessionManager {
             if (currentServer.equalsIgnoreCase(state.target())) {
                 cleanupStickyState(playerId);
                 return;
+            }
+            boolean stillLeaving = currentServer.equalsIgnoreCase(String.valueOf(state.originServer()))
+                    && System.currentTimeMillis() - (state.deadlineMs() - graceMillis) < 5_000;
+            if (stillLeaving) {
+                return; // the move to the waiting lobby hasn't landed yet
             }
             if (!currentServer.equalsIgnoreCase(holdingServer)) {
                 logger.info("[StickySession] tick: player {} no longer in holding (current='{}'); cancelling sticky toward '{}'",

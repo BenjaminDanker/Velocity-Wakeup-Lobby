@@ -23,6 +23,14 @@ public class PortalCommandHandler {
         void notifyInvalidToken(Player player);
         void notifyTransferFailure(Player player);
         String holdingServerName();
+
+        /**
+         * Sends the player straight to the target when it is already up (no stop in the waiting lobby). Completes with
+         * true when they were moved; false means use the lobby and wait as usual.
+         */
+        default CompletionStage<Boolean> tryDirectConnect(Player player, String target) {
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
+        }
     }
 
     @FunctionalInterface
@@ -85,9 +93,15 @@ public class PortalCommandHandler {
                         dependencies.notifyTransferFailure(player);
                         return;
                     }
-                    dependencies.beginStickyWait(playerId, targetServer, originServer);
-                    dependencies.markInternalOnce(playerId, dependencies.holdingServerName());
-                    holdingConnection.get().connect();
+                    dependencies.tryDirectConnect(player, targetServer).whenComplete((direct, directFailure) -> {
+                        if (directFailure == null && Boolean.TRUE.equals(direct)) {
+                            log.info("[WakeUpLobby] {} went straight to '{}' (it was up)", player.getUsername(), targetServer);
+                            return;
+                        }
+                        dependencies.beginStickyWait(playerId, targetServer, originServer);
+                        dependencies.markInternalOnce(playerId, dependencies.holdingServerName());
+                        holdingConnection.get().connect();
+                    });
                 });
         return true;
     }
