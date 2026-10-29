@@ -345,6 +345,10 @@ public class VelocityPlugin {
                     .repeat(Duration.ofSeconds(1))
                     .schedule();
 
+            proxy.getScheduler().buildTask(this, this::showWaitingStatus)
+                    .repeat(Duration.ofSeconds(1))
+                    .schedule();
+
             proxy.getScheduler().buildTask(this, () -> backendHealthMonitor.refresh(runtime.holdingServer()))
                     .repeat(Duration.ofSeconds(2))
                     .schedule();
@@ -972,6 +976,47 @@ public class VelocityPlugin {
         if (routingState != null) {
             routingState.close();
         }
+    }
+
+    /** Players waiting in the lobby for their server to start: a boss bar with the elapsed time, until they move on. */
+    private final Map<UUID, net.kyori.adventure.bossbar.BossBar> waitingBars = new ConcurrentHashMap<>();
+
+    private void showWaitingStatus() {
+        long now = System.currentTimeMillis();
+        java.util.Set<UUID> still = new java.util.HashSet<>();
+        for (var entry : offlineWaitManager.snapshot()) {
+            Player player = proxy.getPlayer(entry.playerId()).orElse(null);
+            if (player == null) {
+                continue;
+            }
+            still.add(entry.playerId());
+            String target = preferredFor(entry.playerId()).orElse("your server");
+            long seconds = Math.max(0, (now - entry.waitingSinceMs()) / 1000);
+            boolean starting = onDemand != null && onDemand.manages(target);
+            Component text = Component.text((starting ? "Waking up " + target : target + " is offline")
+                    + "  " + (seconds / 60) + ":" + String.format("%02d", seconds % 60), net.kyori.adventure.text.format.NamedTextColor.YELLOW);
+            // Starting a server takes about a minute; the bar fills over that and then waits full.
+            float progress = starting ? Math.min(1F, seconds / 70F) : 1F;
+            net.kyori.adventure.bossbar.BossBar bar = waitingBars.computeIfAbsent(entry.playerId(), id -> {
+                net.kyori.adventure.bossbar.BossBar made = net.kyori.adventure.bossbar.BossBar.bossBar(text, progress,
+                        net.kyori.adventure.bossbar.BossBar.Color.YELLOW, net.kyori.adventure.bossbar.BossBar.Overlay.PROGRESS);
+                player.showBossBar(made);
+                player.showTitle(net.kyori.adventure.title.Title.title(
+                        Component.text(starting ? "Waking up " + target : target + " is offline", net.kyori.adventure.text.format.NamedTextColor.GOLD),
+                        Component.text(starting ? "It takes about a minute. You'll be moved in automatically."
+                                : "You'll be moved in when it's back.", net.kyori.adventure.text.format.NamedTextColor.GRAY)));
+                return made;
+            });
+            bar.name(text);
+            bar.progress(progress);
+        }
+        waitingBars.entrySet().removeIf(entry -> {
+            if (still.contains(entry.getKey())) {
+                return false;
+            }
+            proxy.getPlayer(entry.getKey()).ifPresent(player -> player.hideBossBar(entry.getValue()));
+            return true;
+        });
     }
 
     private void placeFreshPlayer(Player player) {
