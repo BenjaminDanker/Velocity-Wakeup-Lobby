@@ -982,32 +982,44 @@ public class VelocityPlugin {
     private final Map<UUID, net.kyori.adventure.bossbar.BossBar> waitingBars = new ConcurrentHashMap<>();
 
     private void showWaitingStatus() {
+        if (runtime == null) {
+            return;
+        }
         long now = System.currentTimeMillis();
         java.util.Set<UUID> still = new java.util.HashSet<>();
-        for (var entry : offlineWaitManager.snapshot()) {
-            Player player = proxy.getPlayer(entry.playerId()).orElse(null);
-            if (player == null) {
+        for (Player player : proxy.getAllPlayers()) {
+            UUID id = player.getUniqueId();
+            String current = currentServerName(player).orElse(null);
+            if (current == null || !current.equalsIgnoreCase(runtime.holdingServer())) {
                 continue;
             }
-            still.add(entry.playerId());
-            String target = preferredFor(entry.playerId()).orElse("your server");
-            long seconds = Math.max(0, (now - entry.waitingSinceMs()) / 1000);
-            boolean starting = onDemand != null && onDemand.manages(target);
-            Component text = Component.text((starting ? "Waking up " + target : target + " is offline")
-                    + "  " + (seconds / 60) + ":" + String.format("%02d", seconds % 60), net.kyori.adventure.text.format.NamedTextColor.YELLOW);
-            // Starting a server takes about a minute; the bar fills over that and then waits full.
-            float progress = starting ? Math.min(1F, seconds / 70F) : 1F;
-            net.kyori.adventure.bossbar.BossBar bar = waitingBars.computeIfAbsent(entry.playerId(), id -> {
-                net.kyori.adventure.bossbar.BossBar made = net.kyori.adventure.bossbar.BossBar.bossBar(text, progress,
+            String target = preferredFor(id).orElse("your server");
+            String text;
+            float progress;
+            if (offlineWaitManager.contains(id)) {
+                long seconds = Math.max(0, (now - offlineWaitManager.waitingSinceMs(id)) / 1000);
+                boolean starting = onDemand != null && onDemand.manages(target);
+                text = (starting ? "Waking up " + target : target + " is offline, waiting for it")
+                        + "  " + (seconds / 60) + ":" + String.format("%02d", seconds % 60);
+                // Starting a server takes about a minute; the bar fills over that and then waits full.
+                progress = starting ? Math.min(1F, seconds / 70F) : 1F;
+            } else if (admissionQueue.contains(id)) {
+                int position = admissionQueue.position(id);
+                text = "In line for " + target + ": #" + position
+                        + (admissionClient != null && !admissionClient.isOpen() ? "  (the host is busy, hang on)" : "");
+                progress = 1F;
+            } else {
+                continue;
+            }
+            still.add(id);
+            Component name = Component.text(text, net.kyori.adventure.text.format.NamedTextColor.YELLOW);
+            net.kyori.adventure.bossbar.BossBar bar = waitingBars.computeIfAbsent(id, key -> {
+                net.kyori.adventure.bossbar.BossBar made = net.kyori.adventure.bossbar.BossBar.bossBar(name, progress,
                         net.kyori.adventure.bossbar.BossBar.Color.YELLOW, net.kyori.adventure.bossbar.BossBar.Overlay.PROGRESS);
                 player.showBossBar(made);
-                player.showTitle(net.kyori.adventure.title.Title.title(
-                        Component.text(starting ? "Waking up " + target : target + " is offline", net.kyori.adventure.text.format.NamedTextColor.GOLD),
-                        Component.text(starting ? "It takes about a minute. You'll be moved in automatically."
-                                : "You'll be moved in when it's back.", net.kyori.adventure.text.format.NamedTextColor.GRAY)));
                 return made;
             });
-            bar.name(text);
+            bar.name(name);
             bar.progress(progress);
         }
         waitingBars.entrySet().removeIf(entry -> {
@@ -1035,12 +1047,9 @@ public class VelocityPlugin {
         offlineWaitManager.add(playerId);
         if (onDemand != null && onDemand.manages(target)) {
             requestServer(target);
-            player.sendMessage(Component.text("§e" + target + " is starting up. You will enter the queue when it is ready."));
             logger.info("[Admission] {} is waiting for '{}' to start", player.getUsername(), target);
             return;
         }
-        player.sendMessage(Component.text("§e" + target + " is currently offline. You will enter the queue when it returns."));
-        player.sendMessage(Component.text("§7After the normal grace period, you can use /return to queue for your return destination instead."));
         logger.info("[Admission] {} waiting outside queue because target '{}' is offline",
                 player.getUsername(), target);
     }
@@ -1053,7 +1062,7 @@ public class VelocityPlugin {
         }
 
         int position = admissionQueue.position(playerId);
-        player.sendMessage(Component.text(message + " §7Position: §f#" + position));
+        // The lobby boss bar shows the place in line; no chat line.
         logger.info("[Admission] queued {} tier={} position={}", player.getUsername(), tier, position);
     }
 
@@ -1237,7 +1246,6 @@ public class VelocityPlugin {
 
                 if (!backendHealthMonitor.isOnline(target)) {
                     offlineWaitManager.add(entry.playerId());
-                    player.sendMessage(Component.text("§e" + target + " went offline. You will re-enter the queue when it returns."));
                     continue;
                 }
 
@@ -1245,7 +1253,6 @@ public class VelocityPlugin {
                 if (serverOpt.isEmpty()) {
                     backendHealthMonitor.markOffline(target);
                     offlineWaitManager.add(entry.playerId());
-                    player.sendMessage(Component.text("§e" + target + " is unavailable. You will re-enter the queue when it returns."));
                     continue;
                 }
 
@@ -1270,7 +1277,6 @@ public class VelocityPlugin {
                         String waitingCurrent = currentServerName(waitingPlayer).orElse(null);
                         if (waitingCurrent != null && waitingCurrent.equalsIgnoreCase(runtime.holdingServer())) {
                             offlineWaitManager.add(entry.playerId());
-                            waitingPlayer.sendMessage(Component.text("§e" + target + " stopped responding. You will re-enter the queue when it returns."));
                         }
                     }
                 });
