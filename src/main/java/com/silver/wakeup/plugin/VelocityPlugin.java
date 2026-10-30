@@ -5,6 +5,7 @@ import com.silver.wakeup.admission.AdmissionClient;
 import com.silver.wakeup.admission.AdmissionQueue;
 import com.silver.wakeup.admission.BackendHealthMonitor;
 import com.silver.wakeup.admission.OfflineWaitManager;
+import com.silver.wakeup.session.StickyRouter;
 import com.silver.wakeup.authorization.AuthorizationBackendKeys;
 import com.silver.wakeup.authorization.CommandCatalogStore;
 import com.silver.wakeup.authorization.CommandCatalogReceiver;
@@ -90,7 +91,6 @@ public class VelocityPlugin {
     private static final PermissionNode SERVER_PERMISSION = PermissionNodes.WAKEUPLOBBY_SERVER;
     private static final PermissionNode BIG_VIP_PERMISSION = PermissionNodes.WAKEUPLOBBY_QUEUE_BIGVIP;
     private static final PermissionNode VIP_PERMISSION = PermissionNodes.WAKEUPLOBBY_QUEUE_VIP;
-    private static final String ADMISSION_STATUS_URL = "http://primary-ram.local:25580/status";
 
     static final String MPDS_REMOVE_SELF_COMMAND = "mpdsremovecustomidself";
     private final ProxyServer proxy;
@@ -331,9 +331,14 @@ public class VelocityPlugin {
             portalCommandHandler = new PortalCommandHandler(logger, new VelocityPortalCommandDependencies());
             commandRegistrar = new CommandRegistrar(proxy, runtime, portalCommandHandler, this, logger);
 
-            admissionClient = new AdmissionClient(ADMISSION_STATUS_URL);
+            admissionClient = new AdmissionClient(capacityHost(config.onDemand()));
             backendHealthMonitor = new BackendHealthMonitor(proxy, logger);
             onDemand = new OnDemandController(logger, runtime::wakeHost);
+            onDemand.setStartPermit(server -> {
+                AdmissionClient.Permit permit = admissionClient.reserveStart(server);
+                // no answer at all: start anyway, as before the capacity service existed
+                return permit == null || permit.granted() ? Optional.empty() : Optional.of(permit.reason());
+            });
             onDemand.setPlayerCount(name -> proxy.getServer(name).map(server -> server.getPlayersConnected().size()).orElse(0));
             onDemand.configure(config.onDemand());
 
@@ -872,7 +877,6 @@ public class VelocityPlugin {
             // Existing backend -> lobby -> backend transfers keep the old sticky path.
             if (!runtime.stickyRouter().hasStickyState(playerId)) {
                 logger.info("[WakeUpLobby] onPreConnect: no existing sticky state, starting sticky toward '{}'", preferred);
-                player.sendMessage(Component.text("⏳ Starting " + preferred + "…"));
                 runtime.stickyRouter().beginStickyWait(playerId, preferred, origin);
             } else {
                 logger.info("[WakeUpLobby] onPreConnect: sticky state already exists for player {}, not recreating",
@@ -996,17 +1000,24 @@ public class VelocityPlugin {
             String target = preferredFor(id).orElse("your server");
             String text;
             float progress;
-            if (offlineWaitManager.contains(id)) {
-                long seconds = Math.max(0, (now - offlineWaitManager.waitingSinceMs(id)) / 1000);
+            Optional<StickyRouter.StickyWait> sticky = runtime.stickyRouter().stickyWait(id);
+            long waitingSince = offlineWaitManager.contains(id) ? offlineWaitManager.waitingSinceMs(id)
+                    : sticky.map(StickyRouter.StickyWait::sinceMs).orElse(-1L);
+            if (sticky.isPresent()) {
+                target = sticky.get().target();
+            }
+            if (waitingSince >= 0) {
+                long seconds = Math.max(0, (now - waitingSince) / 1000);
                 boolean starting = onDemand != null && onDemand.manages(target);
-                text = (starting ? "Waking up " + target : target + " is offline, waiting for it")
+                boolean busy = starting && onDemand.waitingForRoom(target);
+                text = (busy ? "Waking up " + target + "  (the host is busy, hang on)" : starting ? "Waking up " + target : target + " is offline, waiting for it")
                         + "  " + (seconds / 60) + ":" + String.format("%02d", seconds % 60);
                 // Starting a server takes about a minute; the bar fills over that and then waits full.
-                progress = starting ? Math.min(1F, seconds / 70F) : 1F;
+                progress = starting && !busy ? Math.min(1F, seconds / 70F) : 1F;
             } else if (admissionQueue.contains(id)) {
                 int position = admissionQueue.position(id);
-                text = "In line for " + target + ": #" + position
-                        + (admissionClient != null && !admissionClient.isOpen() ? "  (the host is busy, hang on)" : "");
+                boolean busy = admissionClient != null && (!admissionClient.isOpen() || !admissionClient.isAccepting(target));
+                text = "In line for " + target + ": #" + position + (busy ? "  (the host is busy, hang on)" : "");
                 progress = 1F;
             } else {
                 continue;
@@ -1215,6 +1226,7 @@ public class VelocityPlugin {
             return;
         }
 
+        java.util.List<AdmissionQueue.Entry> deferred = new java.util.ArrayList<>();
         try {
             while (true) {
                 AdmissionQueue.Entry entry = admissionQueue.poll();
@@ -1256,6 +1268,11 @@ public class VelocityPlugin {
                     continue;
                 }
 
+                if (!admissionClient.isAccepting(target)) {
+                    deferred.add(entry); // the server is lagging: keep this player's place and try again next round
+                    continue;
+                }
+
                 logger.info("[Admission] releasing {} -> {} tier={}",
                         player.getUsername(), target, entry.tier());
 
@@ -1285,6 +1302,8 @@ public class VelocityPlugin {
         } catch (Throwable t) {
             admissionDispatchInFlight.set(false);
             logger.warn("[Admission] queue processing failed: {}", t.toString());
+        } finally {
+            deferred.forEach(admissionQueue::requeue);
         }
     }
 
@@ -1452,7 +1471,17 @@ public class VelocityPlugin {
         if (onDemand != null) {
             onDemand.configure(config.onDemand());
         }
+        if (admissionClient != null) {
+            admissionClient.configure(capacityHost(config.onDemand()));
+        }
         return config;
+    }
+
+    /** The capacity service runs on the machine that runs the servers: the host of the on-demand ssh target. */
+    static String capacityHost(com.silver.wakeup.config.OnDemandSettings settings) {
+        String target = settings == null || settings.sshTarget() == null ? "" : settings.sshTarget().trim();
+        String host = target.substring(target.indexOf('@') + 1);
+        return host.isBlank() ? "primary-ram.local" : host;
     }
 
     private PortalTokenVerifier ensureTokenVerifier() {

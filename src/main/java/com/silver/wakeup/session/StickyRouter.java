@@ -132,6 +132,14 @@ public class StickyRouter {
         return hasState;
     }
 
+    /** A player waiting in the lobby for a server to start. */
+    public record StickyWait(String target, long sinceMs) {
+    }
+
+    public java.util.Optional<StickyWait> stickyWait(UUID who) {
+        return sessionManager.stickyWait(who);
+    }
+
     /** Cancel any active sticky-wait sequence for this player. */
     public void cancelStickyWait(UUID who) {
         log.info("[StickyRouter] cancelStickyWait: player={}", who);

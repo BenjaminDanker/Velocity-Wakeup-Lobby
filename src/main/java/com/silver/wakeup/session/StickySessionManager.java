@@ -30,7 +30,7 @@ final class StickySessionManager {
     private final long pingIntervalMillis;
     private final StickyRouter router;
 
-    private record StickyState(String target, long deadlineMs, String originServer) {}
+    private record StickyState(String target, long deadlineMs, String originServer, long sinceMs) {}
 
     private final ConcurrentHashMap<UUID, StickyState> stickyStates = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, ScheduledTask> tickTasks = new ConcurrentHashMap<>();
@@ -72,7 +72,7 @@ final class StickySessionManager {
 
         plugin.requestServer(target);
         long deadline = System.currentTimeMillis() + graceMillis;
-        stickyStates.put(playerId, new StickyState(target, deadline, originServer));
+        stickyStates.put(playerId, new StickyState(target, deadline, originServer, System.currentTimeMillis()));
         logger.info("[StickySession] Stored sticky state for player={} deadline={}", playerId, deadline);
 
         tickTasks.computeIfAbsent(playerId, id -> proxy.getScheduler().buildTask(plugin, () -> tick(id))
@@ -83,6 +83,12 @@ final class StickySessionManager {
 
     boolean hasStickyState(UUID playerId) {
         return stickyStates.containsKey(playerId);
+    }
+
+    /** The server this player is waiting for and since when; empty when they aren't waiting. */
+    java.util.Optional<StickyRouter.StickyWait> stickyWait(UUID playerId) {
+        StickyState state = stickyStates.get(playerId);
+        return state == null ? java.util.Optional.empty() : java.util.Optional.of(new StickyRouter.StickyWait(state.target(), state.sinceMs()));
     }
 
     void cleanupStickyState(UUID playerId) {
@@ -174,7 +180,6 @@ final class StickySessionManager {
                         return;
                     }
                     Player connectedPlayer = currentPlayer.get();
-                    connectedPlayer.sendActionBar(Component.text("✅ " + state.target() + " is ready. Moving you now…"));
                     router.markInternalOnce(playerId, serverOpt.get().getServerInfo().getName());
                     connectedPlayer.createConnectionRequest(serverOpt.get()).connect().whenComplete((result, connectErr) -> {
                         if (result != null && result.isSuccessful()) {
@@ -210,8 +215,6 @@ final class StickySessionManager {
                             "⚠ Server may be down. You can try reconnecting or use /return to go back to " + dest
                                     + ". Using /return will remove " + lossList + "."));
                 }
-            } else {
-                player.sendActionBar(Component.text("⏳ Starting " + state.target() + "…"));
             }
         });
     }

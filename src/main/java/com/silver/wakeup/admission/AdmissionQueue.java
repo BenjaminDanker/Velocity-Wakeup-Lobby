@@ -67,6 +67,13 @@ public final class AdmissionQueue {
         }
     }
 
+    /** Puts a polled entry back in its old place (same tier and sequence), unless the player was queued again meanwhile. */
+    public void requeue(Entry entry) {
+        if (entries.putIfAbsent(entry.playerId(), entry) == null) {
+            queue.add(entry);
+        }
+    }
+
     public void remove(UUID playerId) {
         Entry removed = entries.remove(playerId);
         if (removed != null) {

@@ -8,6 +8,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import org.slf4j.Logger;
 
 /**
@@ -75,6 +76,22 @@ public final class OnDemandController {
     /** mc-ctl's exit code when the server has a job running and must not be stopped yet. */
     private static final int BUSY_EXIT = 75;
 
+    /**
+     * Asked just before a start: may this server start now? An empty result means yes; otherwise it is why not, and the start is
+     * tried again on the planner's next round while someone still wants it. Set by the plugin to the capacity service's reservation.
+     */
+    private volatile Function<String, java.util.Optional<String>> startPermit = server -> java.util.Optional.empty();
+    private final java.util.Set<String> waitingForRoom = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    public void setStartPermit(Function<String, java.util.Optional<String>> startPermit) {
+        this.startPermit = startPermit;
+    }
+
+    /** True while the last start attempt for this server was held back for lack of room on the host. */
+    public boolean waitingForRoom(String server) {
+        return waitingForRoom.contains(server);
+    }
+
     /** Players on a backend right now, read again just before a stop (the plan used a snapshot). */
     private volatile java.util.function.ToIntFunction<String> playersNow = server -> 0;
 
@@ -89,8 +106,18 @@ public final class OnDemandController {
             return;
         }
         if (action.kind() == OnDemandPlanner.Kind.START) {
-            // the machine may be asleep; the packet is harmless when it is not
+            // the machine may be asleep; the packet is harmless when it is not (sent before asking for room: an asleep host can't answer)
             wakeHost.accept(action.server());
+            java.util.Optional<String> refused = startPermit.apply(action.server());
+            if (refused.isPresent()) {
+                if (waitingForRoom.add(action.server())) {
+                    log.info("[OnDemand] start of '{}' waits for room on the host: {}", action.server(), refused.get());
+                }
+                return;
+            }
+            if (waitingForRoom.remove(action.server())) {
+                log.info("[OnDemand] '{}' has room now; starting it", action.server());
+            }
         }
         List<String> command = List.of("ssh", "-i", current.sshKey(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
             "-o", "StrictHostKeyChecking=accept-new", current.sshTarget(), verb + " " + action.server());
