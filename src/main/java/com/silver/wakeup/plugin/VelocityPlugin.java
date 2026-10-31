@@ -103,6 +103,7 @@ public class VelocityPlugin {
     private RuntimeState runtime;
     private RoutingStateService routingState;
     private NetworkBans networkBans;
+    private Maintenance maintenance;
     private AuthorizationService authorizationService;
     private AuthorizationBackendKeys authorizationBackendKeys;
     private CommandCatalogReceiver commandCatalogReceiver;
@@ -331,6 +332,11 @@ public class VelocityPlugin {
             networkBans.refresh();
             proxy.getEventManager().register(this, networkBans);
             proxy.getScheduler().buildTask(this, networkBans::refresh).delay(Duration.ofSeconds(10)).repeat(Duration.ofSeconds(10)).schedule();
+            // maintenance mode (table net_maintenance, set from the home page's admin side): admins and allowed names only
+            maintenance = new Maintenance(routingState.dataSource(), proxy, this, logger, this::hasBypass);
+            maintenance.refresh();
+            proxy.getEventManager().register(this, maintenance);
+            proxy.getScheduler().buildTask(this, maintenance::refresh).delay(Duration.ofSeconds(5)).repeat(Duration.ofSeconds(5)).schedule();
             runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
             LobbyConfig config = loadConfig();
 
