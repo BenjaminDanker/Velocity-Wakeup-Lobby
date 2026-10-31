@@ -95,14 +95,15 @@ public final class NetworkBans {
     }
 
     public Ban find(UUID uuid, String name) {
-        Ban ban = uuid == null ? null : byUuid.get(uuid.toString().toLowerCase(Locale.ROOT));
-        if (ban == null && name != null) {
-            ban = byName.get(name.toLowerCase(Locale.ROOT));
-        }
-        if (ban != null && ban.until() != null && ban.until().getTime() <= System.currentTimeMillis()) {
-            return null;
+        Ban ban = uuid == null ? null : active(byUuid.get(uuid.toString().toLowerCase(Locale.ROOT)));
+        if (ban == null && name != null) {  // an expired UUID ban never hides a name ban that still applies
+            ban = active(byName.get(name.toLowerCase(Locale.ROOT)));
         }
         return ban;
+    }
+
+    private static Ban active(Ban ban) {
+        return ban != null && ban.until() != null && ban.until().getTime() <= System.currentTimeMillis() ? null : ban;
     }
 
     @Subscribe
