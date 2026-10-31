@@ -22,11 +22,11 @@ public class SecurityManager {
     private final Logger logger;
     private final WhitelistStore whitelistStore;
 
-    // Rate limiting: ip -> [timestamp1, timestamp2, ...]
-    private final Map<InetAddress, long[]> connectionHistory = new ConcurrentHashMap<>();
-    
-    // Greylisting: ip -> expiration timestamp
-    private final Map<InetAddress, Long> greylist = new ConcurrentHashMap<>();
+    // Rate limiting: who -> [timestamp1, timestamp2, ...]; greylisting: who -> expiration timestamp. "Who" is the address, except
+    // for loopback: everyone from outside arrives through the tunnel as 127.0.0.1, so one address-wide block would lock out every
+    // outside player at once (and anyone could trigger it). There it is the player name instead.
+    private final Map<String, long[]> connectionHistory = new ConcurrentHashMap<>();
+    private final Map<String, Long> greylist = new ConcurrentHashMap<>();
 
     // Settings
     private static final int MAX_CONN_PER_WINDOW = 3;
@@ -41,8 +41,10 @@ public class SecurityManager {
     @Subscribe
     public void onPreLogin(PreLoginEvent event) {
         InetSocketAddress remoteAddress = event.getConnection().getRemoteAddress();
-        InetAddress ip = remoteAddress.getAddress();
+        InetAddress address = remoteAddress.getAddress();
         String username = event.getUsername();
+        boolean shared = address == null || address.isLoopbackAddress();
+        String ip = shared ? "name:" + String.valueOf(username).toLowerCase(java.util.Locale.ROOT) : address.getHostAddress();
         
         // 1. IP Greylist Check
         Long greylistExpiry = greylist.get(ip);
@@ -71,8 +73,10 @@ public class SecurityManager {
 
         // 3. Username/Handshake Validation
         if (!isValidUsername(username)) {
-            logger.warn("[Security] Invalid username from {}: {}", ip, username);
-            greylist.put(ip, System.currentTimeMillis() + GREYLIST_DURATION_MILLIS);
+            logger.warn("[Security] Invalid username from {}: {}", shared ? "the tunnel" : ip, username);
+            if (!shared) {  // a bad name says nothing about the other players sharing the tunnel's address
+                greylist.put(ip, System.currentTimeMillis() + GREYLIST_DURATION_MILLIS);
+            }
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                 Component.text("Invalid username format or characters.", NamedTextColor.RED)
             ));
@@ -129,7 +133,7 @@ public class SecurityManager {
         }
     }
 
-    private boolean isRateLimited(InetAddress ip) {
+    private boolean isRateLimited(String ip) {
         long now = System.currentTimeMillis();
         if (connectionHistory.size() > 512) {
             // Addresses with no connection inside the window can't be rate limited any more; forget them.

@@ -332,8 +332,8 @@ public class VelocityPlugin {
             networkBans.refresh();
             proxy.getEventManager().register(this, networkBans);
             proxy.getScheduler().buildTask(this, networkBans::refresh).delay(Duration.ofSeconds(10)).repeat(Duration.ofSeconds(10)).schedule();
-            // maintenance mode (table net_maintenance, set from the home page's admin side): admins and allowed names only
-            maintenance = new Maintenance(routingState.dataSource(), proxy, this, logger, this::hasBypass);
+            // maintenance mode (table net_maintenance, set from the home page's admin side): admins and test bots only
+            maintenance = new Maintenance(routingState.dataSource(), proxy, this, logger, this::isAdminOn);
             maintenance.refresh();
             proxy.getEventManager().register(this, maintenance);
             proxy.getScheduler().buildTask(this, maintenance::refresh).delay(Duration.ofSeconds(5)).repeat(Duration.ofSeconds(5)).schedule();
@@ -1373,6 +1373,25 @@ public class VelocityPlugin {
 
     private boolean hasBypass(Player p) {
         return hasAuthorizationPermission(p, SERVER_PERMISSION);
+    }
+
+    /**
+     * Admin on a server, or on any server when {@code serverName} is null. Unlike {@link #hasBypass}, this doesn't need the
+     * player to be on a server already (at login and on their first connect they aren't).
+     */
+    boolean isAdminOn(Player player, String serverName) {
+        if (authorizationService == null || player == null) return false;
+        Set<ServerId> enabled = authorizationService.currentState().enabledServers();
+        AuthorizationSubject subject = AuthorizationSubject.player(player.getUniqueId());
+        if (serverName == null) {
+            return enabled.stream().anyMatch(server -> authorizationService.has(subject, SERVER_PERMISSION, server));
+        }
+        try {
+            ServerId server = ServerId.of(serverName);
+            return enabled.contains(server) && authorizationService.has(subject, SERVER_PERMISSION, server);
+        } catch (IllegalArgumentException notAServerId) {
+            return false;
+        }
     }
 
     boolean hasAuthorizationPermission(Player player, PermissionNode permission) {

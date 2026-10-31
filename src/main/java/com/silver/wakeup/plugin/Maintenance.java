@@ -7,6 +7,7 @@ import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.slf4j.Logger;
@@ -17,25 +18,29 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.net.InetAddress;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 
 /**
- * Maintenance mode: a server under maintenance takes nobody but admins and the names allowed for it (test bots), so it can be
- * restarted and edited freely. Server "*" means every server, and then the network itself refuses everyone else at login.
+ * Maintenance mode: a server under maintenance takes nobody but admins and test bots, so it can be restarted and edited
+ * freely. Server "*" means every server, and then the network itself refuses everyone else at login.
+ *
+ * <p>A test bot is a connection from the machine a game server runs on (the test clients run there; Carpet's fake players
+ * never pass through the proxy at all). Loopback never counts: players from outside arrive through the tunnel as 127.0.0.1,
+ * and the waiting lobby runs on this machine.</p>
  *
  * <p>The switches live in the network database (table {@code net_maintenance}; the home page's admin side sets and clears them)
  * and are read every few seconds. When a server goes under maintenance, the players on it are warned and disconnected
  * {@link #GRACE} later, unless they are allowed in.</p>
  */
 public final class Maintenance {
-    public record Entry(String server, String reason, Set<String> allowed) {
+    public record Entry(String server, String reason) {
     }
 
     static final Duration GRACE = Duration.ofSeconds(30);
@@ -44,13 +49,14 @@ public final class Maintenance {
     private final ProxyServer proxy;
     private final Object plugin;
     private final Logger logger;
-    private final Predicate<Player> admin;
+    private final BiPredicate<Player, String> admin;
     private volatile Map<String, Entry> entries = Map.of();
     private final Set<UUID> warned = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Long> lastRefusal = new ConcurrentHashMap<>();
     private volatile boolean tableReady;
 
-    public Maintenance(DataSource dataSource, ProxyServer proxy, Object plugin, Logger logger, Predicate<Player> admin) {
+    /** {@code admin}: whether a player is an admin on a server (null: on any server). */
+    public Maintenance(DataSource dataSource, ProxyServer proxy, Object plugin, Logger logger, BiPredicate<Player, String> admin) {
         this.dataSource = dataSource;
         this.proxy = proxy;
         this.plugin = plugin;
@@ -64,7 +70,7 @@ public final class Maintenance {
         }
         try (Statement s = c.createStatement()) {
             s.execute("CREATE TABLE IF NOT EXISTS net_maintenance (server VARCHAR(64) PRIMARY KEY, reason VARCHAR(255) NOT NULL DEFAULT '',"
-                    + " allow_names TEXT NULL, since DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, set_by VARCHAR(64) NOT NULL DEFAULT '')");
+                    + " since DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, set_by VARCHAR(64) NOT NULL DEFAULT '')");
         }
         tableReady = true;
     }
@@ -74,16 +80,9 @@ public final class Maintenance {
         Map<String, Entry> next = new HashMap<>();
         try (Connection c = dataSource.getConnection()) {
             ensureTable(c);
-            try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT server, reason, allow_names FROM net_maintenance")) {
+            try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT server, reason FROM net_maintenance")) {
                 while (r.next()) {
-                    Set<String> allowed = new HashSet<>();
-                    String names = r.getString(3);
-                    if (names != null) {
-                        for (String n : names.split("[,\\s]+")) {
-                            if (!n.isBlank()) allowed.add(n.toLowerCase(Locale.ROOT));
-                        }
-                    }
-                    next.put(r.getString(1).toLowerCase(Locale.ROOT), new Entry(r.getString(1), r.getString(2), allowed));
+                    next.put(r.getString(1).toLowerCase(Locale.ROOT), new Entry(r.getString(1), r.getString(2)));
                 }
             }
         } catch (SQLException failure) {
@@ -94,7 +93,7 @@ public final class Maintenance {
         for (Player player : proxy.getAllPlayers()) {
             String server = player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse(null);
             Entry entry = server == null ? next.get("*") : applying(server);
-            if (entry == null || allowed(player, entry)) {
+            if (entry == null || allowed(player, server)) {
                 warned.remove(player.getUniqueId());
                 continue;
             }
@@ -112,7 +111,7 @@ public final class Maintenance {
         proxy.getPlayer(id).ifPresent(player -> {
             String server = player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse(null);
             Entry entry = server == null ? entries.get("*") : applying(server);
-            if (entry != null && !allowed(player, entry)) {
+            if (entry != null && !allowed(player, server)) {
                 logger.info("[Maintenance] disconnecting {} from {}", player.getUsername(), server);
                 player.disconnect(message(server, entry));
             }
@@ -126,14 +125,29 @@ public final class Maintenance {
         return own != null ? own : now.get("*");
     }
 
-    boolean allowed(Player player, Entry entry) {
-        return entry.allowed().contains(player.getUsername().toLowerCase(Locale.ROOT)) || admin.test(player);
+    /** Admins (on that server; on any server at login) and test bots. */
+    boolean allowed(Player player, String server) {
+        return isBot(player) || admin.test(player, server);
+    }
+
+    boolean isBot(Player player) {
+        InetAddress from = player.getRemoteAddress() == null ? null : player.getRemoteAddress().getAddress();
+        if (from == null || from.isLoopbackAddress()) {
+            return false;
+        }
+        for (RegisteredServer server : proxy.getAllServers()) {
+            InetAddress host = server.getServerInfo().getAddress().getAddress();  // resolved when the server was registered
+            if (host != null && !host.isLoopbackAddress() && host.equals(from)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Subscribe
     public void onLogin(LoginEvent event) {
         Entry all = entries.get("*");
-        if (all != null && !allowed(event.getPlayer(), all)) {
+        if (all != null && !allowed(event.getPlayer(), null)) {
             logger.info("[Maintenance] refused {}: the network is under maintenance", event.getPlayer().getUsername());
             event.setResult(ResultedEvent.ComponentResult.denied(message(null, all)));
         }
@@ -148,7 +162,7 @@ public final class Maintenance {
         }
         String server = target.getServerInfo().getName();
         Entry entry = applying(server);
-        if (entry == null || allowed(event.getPlayer(), entry)) {
+        if (entry == null || allowed(event.getPlayer(), server)) {
             return;
         }
         event.setResult(ServerPreConnectEvent.ServerResult.denied());
