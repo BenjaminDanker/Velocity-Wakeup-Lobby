@@ -102,6 +102,7 @@ public class VelocityPlugin {
     private LobbyConfigLoader configLoader;
     private RuntimeState runtime;
     private RoutingStateService routingState;
+    private NetworkBans networkBans;
     private AuthorizationService authorizationService;
     private AuthorizationBackendKeys authorizationBackendKeys;
     private CommandCatalogReceiver commandCatalogReceiver;
@@ -325,6 +326,11 @@ public class VelocityPlugin {
             whitelistStore.ensureFileAndLoad();
             securityManager = new SecurityManager(logger, whitelistStore);
             proxy.getEventManager().register(this, securityManager);
+            // network-wide bans (table net_bans, edited by the home page's admin side): read now, then every 10 s
+            networkBans = new NetworkBans(routingState.dataSource(), proxy, logger);
+            networkBans.refresh();
+            proxy.getEventManager().register(this, networkBans);
+            proxy.getScheduler().buildTask(this, networkBans::refresh).delay(Duration.ofSeconds(10)).repeat(Duration.ofSeconds(10)).schedule();
             runtime = new RuntimeState(proxy, this, logger, portalHandoffService, portalTokenVerifier, portalRequestVerifier);
             LobbyConfig config = loadConfig();
 
