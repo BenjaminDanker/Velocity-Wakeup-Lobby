@@ -75,6 +75,10 @@ public final class OnDemandController {
 
     /** mc-ctl's exit code when the server has a job running and must not be stopped yet. */
     private static final int BUSY_EXIT = 75;
+    private static final long FAILURE_LOG_EVERY_MS = 5 * 60_000L;
+    private final java.util.Map<String, Integer> failures = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Long> lastFailureLog = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> busy = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * Asked just before a start: may this server start now? An empty result means yes; otherwise it is why not, and the start is
@@ -123,12 +127,30 @@ public final class OnDemandController {
             "-o", "StrictHostKeyChecking=accept-new", current.sshTarget(), verb + " " + action.server());
         try {
             int exit = runner.run(command);
+            String key = verb + " " + action.server();
+            if (exit != 0 && !(exit == BUSY_EXIT && action.kind() == OnDemandPlanner.Kind.STOP)) {
+                // the first failure, then a reminder at most every 5 minutes while the retries keep failing
+                int n = failures.merge(key, 1, Integer::sum);
+                long nowMs = System.currentTimeMillis();
+                Long last = lastFailureLog.get(key);
+                if (n == 1 || last == null || nowMs - last >= FAILURE_LOG_EVERY_MS) {
+                    lastFailureLog.put(key, nowMs);
+                    log.warn("[OnDemand] {} of '{}' failed (ssh exit {}){}; will retry while it is wanted", verb, action.server(), exit,
+                            n > 1 ? " (" + n + " attempts so far)" : "");
+                }
+                return;
+            }
+            Integer failed = failures.remove(key);
+            lastFailureLog.remove(key);
             if (exit == 0) {
-                log.info("[OnDemand] asked for {} of '{}'", verb, action.server());
+                busy.remove(action.server());
+                log.info("[OnDemand] asked for {} of '{}'{}", verb, action.server(), failed != null ? " (after " + failed + " failed attempts)" : "");
             } else if (exit == BUSY_EXIT && action.kind() == OnDemandPlanner.Kind.STOP) {
-                log.info("[OnDemand] '{}' is busy with a job (e.g. an Atlantis build); idle stop postponed", action.server());
-            } else {
-                log.warn("[OnDemand] {} of '{}' failed (ssh exit {}); will retry while it is wanted", verb, action.server(), exit);
+                // said once per busy stretch (the stop is retried every minute while it lasts)
+                if (busy.add(action.server())) {
+                    log.info("[OnDemand] '{}' is busy with a job (e.g. an Atlantis build); idle stop postponed until it's done", action.server());
+                }
+                return;
             }
         } catch (IOException | InterruptedException failure) {
             log.warn("[OnDemand] {} of '{}' could not be requested: {}", verb, action.server(), failure.toString());
